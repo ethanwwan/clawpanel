@@ -21,12 +21,13 @@ export async function render() {
       </div>
     </div>
     <div class="page-content">
-      <div id="agents-list"></div>
+      <div id="agents-list" class="loading-text">加载中...</div>
     </div>
   `
 
   const state = { agents: [] }
-  await loadAgents(page, state)
+  // 非阻塞：先返回 DOM，后台加载数据
+  loadAgents(page, state)
 
   page.querySelector('#btn-add-agent').addEventListener('click', () => showAddAgentDialog(page, state))
 

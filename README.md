@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="public/images/logo.svg" width="120" alt="ClawPanel Logo">
+  <img src="public/images/logo-brand.png" width="360" alt="ClawPanel">
 </p>
-
-<h1 align="center">ClawPanel</h1>
 
 <p align="center">
   OpenClaw 可视化管理面板 — 基于 Tauri v2 的跨平台桌面应用
@@ -72,7 +70,7 @@ ClawPanel 是 [OpenClaw](https://github.com/openclaw-labs/openclaw) AI Agent 框
 
 ## 功能截图
 
-> 截图待补充
+> 截图待补充 — 欢迎提交 PR 补充各页面截图
 
 ## 技术架构
 
@@ -122,7 +120,11 @@ clawpanel/
 git clone https://github.com/qingchencloud/clawpanel.git
 cd clawpanel
 npm install
+```
 
+#### macOS / Linux
+
+```bash
 # 启动完整 Tauri 桌面应用
 ./scripts/dev.sh
 
@@ -130,7 +132,19 @@ npm install
 ./scripts/dev.sh web
 ```
 
+#### Windows
+
+```powershell
+# 启动完整 Tauri 桌面应用
+npm run tauri dev
+
+# 仅启动 Vite 前端（浏览器调试，使用 mock 数据）
+npm run dev
+```
+
 ### 构建
+
+#### macOS / Linux
 
 ```bash
 # 编译 debug 版本
@@ -142,6 +156,21 @@ npm install
 # 编译正式发布版本（含打包）
 ./scripts/build.sh release
 ```
+
+#### Windows
+
+```powershell
+# 检查 Rust 编译
+cd src-tauri && cargo check
+
+# 编译正式发布版本
+npm run tauri build
+
+# 指定打包格式（NSIS 安装器）
+npm run tauri build -- --bundles nsis
+```
+
+产物位于 `src-tauri/target/release/` 目录。
 
 ## 相关项目
 

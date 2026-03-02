@@ -26,10 +26,10 @@ export async function render() {
       <p class="page-desc">管理 OpenClaw 服务、检查更新、配置备份</p>
     </div>
     <div id="version-bar"></div>
-    <div id="services-list">加载中...</div>
+    <div id="services-list" class="loading-text">加载中...</div>
     <div class="config-section" id="registry-section">
       <div class="config-section-title">npm 源设置</div>
-      <div id="registry-bar">加载中...</div>
+      <div id="registry-bar" class="loading-text">加载中...</div>
     </div>
     <div class="config-section" id="backup-section">
       <div class="config-section-title">配置备份</div>
@@ -37,7 +37,7 @@ export async function render() {
       <div id="backup-actions" style="margin-bottom:var(--space-md)">
         <button class="btn btn-primary btn-sm" data-action="create-backup">创建备份</button>
       </div>
-      <div id="backup-list">加载中...</div>
+      <div id="backup-list" class="loading-text">加载中...</div>
     </div>
   `
 
@@ -141,25 +141,37 @@ async function loadServices(page) {
 function renderServices(container, services) {
   const gw = services.find(s => s.label === 'ai.openclaw.gateway')
 
-  // Gateway 专属卡片（带安装/卸载）
   let html = ''
   if (gw) {
+    // 检测 CLI 是否安装
+    const cliMissing = gw.cli_installed === false
+
     html += `
     <div class="service-card" data-label="${gw.label}">
       <div class="service-info">
-        <span class="status-dot ${gw.running ? 'running' : 'stopped'}"></span>
+        <span class="status-dot ${cliMissing ? 'stopped' : gw.running ? 'running' : 'stopped'}"></span>
         <div>
           <div class="service-name">${gw.label}</div>
-          <div class="service-desc">${gw.description || ''}${gw.pid ? ' (PID: ' + gw.pid + ')' : ''}</div>
+          <div class="service-desc">${cliMissing
+            ? 'OpenClaw CLI 未安装'
+            : (gw.description || '') + (gw.pid ? ' (PID: ' + gw.pid + ')' : '')
+          }</div>
         </div>
       </div>
       <div class="service-actions">
-        ${gw.running
-          ? `<button class="btn btn-secondary btn-sm" data-action="restart" data-label="${gw.label}">重启</button>
-             <button class="btn btn-danger btn-sm" data-action="stop" data-label="${gw.label}">停止</button>
-             <button class="btn btn-danger btn-sm" data-action="uninstall-gateway">卸载</button>`
-          : `<button class="btn btn-primary btn-sm" data-action="start" data-label="${gw.label}">启动</button>
-             <button class="btn btn-danger btn-sm" data-action="uninstall-gateway">卸载</button>`
+        ${cliMissing
+          ? `<div style="display:flex;flex-direction:column;gap:var(--space-xs);align-items:flex-end">
+               <div style="color:var(--text-tertiary);font-size:var(--font-size-xs)">请先安装 OpenClaw CLI:</div>
+               <code style="font-size:var(--font-size-xs);background:var(--bg-tertiary);padding:2px 8px;border-radius:4px;user-select:all">npm install -g @qingchencloud/openclaw-zh</code>
+               <button class="btn btn-secondary btn-sm" data-action="refresh-services" style="margin-top:4px">刷新状态</button>
+             </div>`
+          : gw.running
+            ? `<button class="btn btn-secondary btn-sm" data-action="restart" data-label="${gw.label}">重启</button>
+               <button class="btn btn-danger btn-sm" data-action="stop" data-label="${gw.label}">停止</button>
+               <button class="btn btn-danger btn-sm" data-action="uninstall-gateway">卸载</button>`
+            : `<button class="btn btn-primary btn-sm" data-action="start" data-label="${gw.label}">启动</button>
+               <button class="btn btn-primary btn-sm" data-action="install-gateway">安装</button>
+               <button class="btn btn-danger btn-sm" data-action="uninstall-gateway">卸载</button>`
         }
       </div>
     </div>`
@@ -254,6 +266,9 @@ function bindEvents(page) {
           break
         case 'uninstall-gateway':
           await handleUninstallGateway(btn, page)
+          break
+        case 'refresh-services':
+          await loadServices(page)
           break
         case 'save-registry':
           await handleSaveRegistry(btn, page)

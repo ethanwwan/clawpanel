@@ -3,8 +3,9 @@
  */
 import { navigate, getCurrentRoute } from '../router.js'
 import { toggleTheme, getTheme } from '../lib/theme.js'
+import { isOpenclawReady } from '../lib/app-state.js'
 
-const NAV_ITEMS = [
+const NAV_ITEMS_FULL = [
   {
     section: '概览',
     items: [
@@ -42,7 +43,29 @@ const NAV_ITEMS = [
   }
 ]
 
+const NAV_ITEMS_SETUP = [
+  {
+    section: '',
+    items: [
+      { route: '/setup', label: '初始设置', icon: 'setup' },
+    ]
+  },
+  {
+    section: '扩展',
+    items: [
+      { route: '/extensions', label: '扩展工具', icon: 'extensions' },
+    ]
+  },
+  {
+    section: '',
+    items: [
+      { route: '/about', label: '关于', icon: 'about' },
+    ]
+  }
+]
+
 const ICONS = {
+  setup: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>',
   dashboard: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
   chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>',
   services: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>',
@@ -63,21 +86,16 @@ export function renderSidebar(el) {
   let html = `
     <div class="sidebar-header">
       <div class="sidebar-logo">
-        <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-          <g fill="currentColor">
-            <circle cx="256" cy="280" r="55"/>
-            <ellipse cx="140" cy="200" rx="32" ry="70" transform="rotate(-30 140 200)"/>
-            <ellipse cx="372" cy="200" rx="32" ry="70" transform="rotate(30 372 200)"/>
-            <ellipse cx="256" cy="380" rx="32" ry="70"/>
-          </g>
-        </svg>
+        <img src="/images/logo.png" alt="ClawPanel">
       </div>
       <span class="sidebar-title">ClawPanel</span>
     </div>
     <nav class="sidebar-nav">
   `
 
-  for (const section of NAV_ITEMS) {
+  const navItems = isOpenclawReady() ? NAV_ITEMS_FULL : NAV_ITEMS_SETUP
+
+  for (const section of navItems) {
     html += `<div class="nav-section">
       <div class="nav-section-title">${section.section}</div>`
 

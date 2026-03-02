@@ -24,15 +24,17 @@
   width: 28px;
   height: 28px;
   border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 700;
-  font-size: var(--font-size-sm);
-  color: var(--text-inverse);
   flex-shrink: 0;
-  padding: 4px;
+  overflow: hidden;
+}
+
+.sidebar-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .sidebar-logo svg {
@@ -106,10 +108,18 @@
   opacity: 1;
 }
 
+/* 主内容列（横幅 + 内容区） */
+#main-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
 /* 主内容区 */
 #content {
   flex: 1;
-  height: 100vh;
   overflow-y: auto;
   background: var(--bg-primary);
 }
@@ -117,7 +127,7 @@
 .page {
   padding: var(--space-xl) var(--space-2xl);
   max-width: 1200px;
-  animation: fadeIn 200ms ease;
+  animation: pageIn 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .page-header {
@@ -143,7 +153,70 @@
   color: var(--text-tertiary);
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(4px); }
+@keyframes pageIn {
+  from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pageOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.page-exit {
+  animation: pageOut 100ms ease forwards;
+  pointer-events: none;
+}
+
+/* Setup 页面版本选择卡片 */
+.setup-source-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+}
+
+.setup-source-option:hover {
+  border-color: var(--accent);
+  background: var(--bg-glass-hover);
+}
+
+.setup-source-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+
+/* Gateway 未启动引导横幅 */
+.gw-banner {
+  background: var(--warning, #f59e0b);
+  color: #000;
+  padding: 8px 16px;
+  font-size: var(--font-size-sm);
+  z-index: 100;
+  transition: all 300ms ease;
+  overflow: hidden;
+  max-height: 50px;
+}
+.gw-banner-hidden {
+  max-height: 0;
+  padding: 0 16px;
+  opacity: 0;
+}
+.gw-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.gw-banner-icon {
+  font-size: 16px;
+}
+.gw-banner .btn {
+  margin-left: auto;
+  background: rgba(0,0,0,0.15);
+  border: none;
+  color: #000;
+  font-weight: 600;
 }

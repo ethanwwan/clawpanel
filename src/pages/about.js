@@ -12,7 +12,7 @@ export async function render() {
 
   page.innerHTML = `
     <div class="page-header" style="display:flex;align-items:center;gap:16px">
-      <img src="/images/logo.svg" alt="ClawPanel" style="width:48px;height:48px;border-radius:var(--radius-md)">
+      <img src="/images/logo-brand.png" alt="ClawPanel" style="height:48px;width:auto">
       <div>
         <h1 class="page-title" style="margin:0">ClawPanel</h1>
         <p class="page-desc" style="margin:0">OpenClaw 可视化管理面板</p>

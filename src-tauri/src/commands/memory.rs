@@ -2,11 +2,21 @@
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use crate::utils::openclaw_command;
+
+/// 检查路径是否包含不安全字符（目录遍历、绝对路径等）
+fn is_unsafe_path(path: &str) -> bool {
+    path.contains("..")
+        || path.contains('\0')
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || (path.len() >= 2 && path.as_bytes()[1] == b':') // Windows 绝对路径 C:\
+}
 
 /// 根据 agent_id 获取 workspace 路径
 /// 调用 openclaw agents list --json 解析
 fn agent_workspace(agent_id: &str) -> Result<PathBuf, String> {
-    let output = std::process::Command::new("openclaw")
+    let output = openclaw_command()
         .args(["agents", "list", "--json"])
         .output()
         .map_err(|e| format!("执行 openclaw 失败: {e}"))?;
@@ -96,7 +106,7 @@ fn collect_files(
 
 #[tauri::command]
 pub fn read_memory_file(path: String, agent_id: Option<String>) -> Result<String, String> {
-    if path.contains("..") || path.starts_with('/') || path.contains('\0') {
+    if is_unsafe_path(&path) {
         return Err("非法路径".to_string());
     }
 
@@ -122,7 +132,7 @@ pub fn read_memory_file(path: String, agent_id: Option<String>) -> Result<String
 
 #[tauri::command]
 pub fn write_memory_file(path: String, content: String, category: Option<String>, agent_id: Option<String>) -> Result<(), String> {
-    if path.contains("..") || path.starts_with('/') || path.contains('\0') {
+    if is_unsafe_path(&path) {
         return Err("非法路径".to_string());
     }
 
@@ -139,7 +149,7 @@ pub fn write_memory_file(path: String, content: String, category: Option<String>
 
 #[tauri::command]
 pub fn delete_memory_file(path: String, agent_id: Option<String>) -> Result<(), String> {
-    if path.contains("..") || path.starts_with('/') || path.contains('\0') {
+    if is_unsafe_path(&path) {
         return Err("非法路径".to_string());
     }
 

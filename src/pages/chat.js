@@ -109,7 +109,8 @@ export async function render() {
   _cmdPanelEl = page.querySelector('#chat-cmd-panel')
 
   bindEvents(page)
-  await connectGateway()
+  // 非阻塞：先返回 DOM，后台连接 Gateway
+  connectGateway()
   return page
 }
 

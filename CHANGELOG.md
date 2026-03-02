@@ -26,9 +26,19 @@
 - **CI/CD** — GitHub Actions 持续集成 + 全平台发布构建（macOS ARM64/Intel、Windows x64、Linux x64）
 - **手动发布** — 支持 workflow_dispatch 手动触发构建，填入版本号即可一键发布
 
+### 优化 (Improvements)
+
+- **全局异步加载** — 所有页面 render() 非阻塞返回 DOM，数据在后台异步加载，消除页面切换卡顿
+- **路由模块缓存** — 已加载的页面模块缓存复用，二次切换跳过动态 import
+- **Tauri API 预加载** — invoke 模块启动时预加载，避免每次 API 调用的动态 import 开销
+- **页面过渡动画** — 进入动画（220ms 上滑淡入）+ 退出动画（100ms 淡出），丝滑切换体验
+- **Windows 兼容** — Rust 后端通过 `#[cfg(target_os)]` 条件编译支持 Windows 平台（服务管理、版本检测、扩展工具等）
+- **Setup 引导模式** — 未安装 OpenClaw 时自动进入引导页面，安装完成后切换到正常模式
+
 ### 技术亮点
 
 - 零框架依赖：纯 Vanilla JS，无 React/Vue 等框架
 - Tauri v2 + Rust 后端，原生性能
 - 玻璃拟态暗色主题，现代化 UI
 - 全中文界面与代码注释
+- 跨平台支持：macOS (ARM64/Intel) + Windows + Linux

@@ -3,6 +3,9 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use crate::utils::openclaw_command;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 use crate::models::types::VersionInfo;
 
@@ -20,10 +23,23 @@ fn get_configured_registry() -> String {
 }
 
 /// 创建使用配置源的 npm Command
+/// Windows 上 npm 是 npm.cmd，需要通过 cmd /c 调用，并隐藏窗口
 fn npm_command() -> Command {
-    let mut cmd = Command::new("npm");
-    cmd.args(["--registry", &get_configured_registry()]);
-    cmd
+    let registry = get_configured_registry();
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/c", "npm", "--registry", &registry]);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut cmd = Command::new("npm");
+        cmd.args(["--registry", &registry]);
+        cmd
+    }
 }
 
 fn backups_dir() -> PathBuf {
@@ -45,11 +61,48 @@ pub fn write_openclaw_config(config: Value) -> Result<(), String> {
     // 备份
     let bak = super::openclaw_dir().join("openclaw.json.bak");
     let _ = fs::copy(&path, &bak);
+    // 清理 UI 专属字段，避免 CLI schema 校验失败
+    let cleaned = strip_ui_fields(config);
     // 写入
-    let json = serde_json::to_string_pretty(&config)
+    let json = serde_json::to_string_pretty(&cleaned)
         .map_err(|e| format!("序列化失败: {e}"))?;
     fs::write(&path, json)
         .map_err(|e| format!("写入失败: {e}"))
+}
+
+/// 递归清理 models 数组中的 UI 专属字段（lastTestAt, latency, testStatus, testError）
+/// 并为缺少 name 字段的模型自动补上 name = id
+fn strip_ui_fields(mut val: Value) -> Value {
+    if let Some(obj) = val.as_object_mut() {
+        // 递归处理 providers -> xxx -> models 数组
+        if let Some(models) = obj.get("models") {
+            if let Some(providers) = models.as_object() {
+                let mut new_models = providers.clone();
+                for (_key, provider) in new_models.iter_mut() {
+                    if let Some(pobj) = provider.as_object_mut() {
+                        if let Some(Value::Array(arr)) = pobj.get_mut("models") {
+                            for model in arr.iter_mut() {
+                                if let Some(mobj) = model.as_object_mut() {
+                                    mobj.remove("lastTestAt");
+                                    mobj.remove("latency");
+                                    mobj.remove("testStatus");
+                                    mobj.remove("testError");
+                                    // 补上 name 字段（CLI 要求）
+                                    if !mobj.contains_key("name") {
+                                        if let Some(id) = mobj.get("id").and_then(|v| v.as_str()) {
+                                            mobj.insert("name".into(), Value::String(id.to_string()));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                obj.insert("models".into(), Value::Object(new_models));
+            }
+        }
+    }
+    val
 }
 
 #[tauri::command]
@@ -74,25 +127,29 @@ pub fn write_mcp_config(config: Value) -> Result<(), String> {
 }
 
 /// 获取本地安装的 openclaw 版本号
-/// 优先从 npm 包的 package.json 读取（含完整后缀），fallback 到 CLI
+/// macOS: 优先从 npm 包的 package.json 读取（含完整后缀），fallback 到 CLI
+/// Windows/Linux: 直接用 CLI
 fn get_local_version() -> Option<String> {
-    // 通过 symlink 找到包目录，读 package.json 的 version
-    if let Ok(target) = fs::read_link("/opt/homebrew/bin/openclaw") {
-        let pkg_json = PathBuf::from("/opt/homebrew/bin")
-            .join(&target)
-            .parent()?
-            .join("package.json");
-        if let Ok(content) = fs::read_to_string(&pkg_json) {
-            if let Some(ver) = serde_json::from_str::<Value>(&content)
-                .ok()
-                .and_then(|v| v.get("version")?.as_str().map(String::from))
-            {
-                return Some(ver);
+    // macOS: 通过 symlink 找到包目录，读 package.json 的 version
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(target) = fs::read_link("/opt/homebrew/bin/openclaw") {
+            let pkg_json = PathBuf::from("/opt/homebrew/bin")
+                .join(&target)
+                .parent()?
+                .join("package.json");
+            if let Ok(content) = fs::read_to_string(&pkg_json) {
+                if let Some(ver) = serde_json::from_str::<Value>(&content)
+                    .ok()
+                    .and_then(|v| v.get("version")?.as_str().map(String::from))
+                {
+                    return Some(ver);
+                }
             }
         }
     }
-    // fallback: CLI 输出
-    let output = Command::new("openclaw").arg("--version").output().ok()?;
+    // 所有平台通用 fallback: CLI 输出
+    let output = openclaw_command().arg("--version").output().ok()?;
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
     raw.split_whitespace().last().filter(|s| !s.is_empty()).map(String::from)
 }
@@ -114,25 +171,48 @@ async fn get_latest_version_for(source: &str) -> Option<String> {
 }
 
 /// 检测当前安装的是官方版还是汉化版
-/// 优先检查文件系统（不依赖 npm 命令的 PATH），fallback 到 npm list
+/// macOS: 优先检查 homebrew symlink，fallback 到 npm list
+/// Windows: 优先检查 npm 全局目录下的 package.json，避免调用 npm list 阻塞
+/// Linux: 直接用 npm list
 fn detect_installed_source() -> String {
-    // 方法1：直接检查 openclaw bin 的 symlink 指向
-    if let Ok(target) = std::fs::read_link("/opt/homebrew/bin/openclaw") {
-        if target.to_string_lossy().contains("openclaw-zh") {
-            return "chinese".into();
+    // macOS: 检查 openclaw bin 的 symlink 指向
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(target) = std::fs::read_link("/opt/homebrew/bin/openclaw") {
+            if target.to_string_lossy().contains("openclaw-zh") {
+                return "chinese".into();
+            }
+            return "official".into();
+        }
+    }
+    // Windows: 优先通过文件系统检测，避免 npm list 阻塞
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            let zh_dir = PathBuf::from(&appdata)
+                .join("npm")
+                .join("node_modules")
+                .join("@qingchencloud")
+                .join("openclaw-zh");
+            if zh_dir.exists() {
+                return "chinese".into();
+            }
         }
         return "official".into();
     }
-    // 方法2：fallback 到 npm list
-    if let Ok(o) = npm_command()
-        .args(["list", "-g", "@qingchencloud/openclaw-zh", "--depth=0"])
-        .output()
+    // 所有平台通用: npm list 检测
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        if String::from_utf8_lossy(&o.stdout).contains("openclaw-zh@") {
-            return "chinese".into();
+        if let Ok(o) = npm_command()
+            .args(["list", "-g", "@qingchencloud/openclaw-zh", "--depth=0"])
+            .output()
+        {
+            if String::from_utf8_lossy(&o.stdout).contains("openclaw-zh@") {
+                return "chinese".into();
+            }
         }
+        "official".into()
     }
-    "official".into()
 }
 
 #[tauri::command]
@@ -175,13 +255,15 @@ pub async fn upgrade_openclaw(app: tauri::AppHandle, source: String) -> Result<S
     let current_source = detect_installed_source();
     let pkg = format!("{}@latest", npm_package_name(&source));
 
-    // 切换源时先卸载旧包，避免 bin 冲突
+    // 切换源时，或者未安装时（检测 source 和 target，或者目前未安装）
+    // 如果系统里已经安装了别的源，先卸载
+    let old_pkg = npm_package_name(&current_source);
     if current_source != source {
-        let old_pkg = npm_package_name(&current_source);
-        let _ = app.emit("upgrade-log", format!("正在卸载旧版本 ({old_pkg})..."));
+        // 先检查是否真的安装了旧包，如果没有安装，npm uninstall 会报错但不影响
+        let _ = app.emit("upgrade-log", format!("清理遗留环境 ({old_pkg})..."));
         let _ = app.emit("upgrade-progress", 5);
         let _ = npm_command()
-            .args(["uninstall", "-g", old_pkg])
+            .args(["uninstall", "-g", &old_pkg])
             .output();
     }
 
@@ -189,7 +271,7 @@ pub async fn upgrade_openclaw(app: tauri::AppHandle, source: String) -> Result<S
     let _ = app.emit("upgrade-progress", 10);
 
     let mut child = npm_command()
-        .args(["install", "-g", &pkg])
+        .args(["install", "-g", &pkg, "--verbose"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -230,16 +312,25 @@ pub async fn upgrade_openclaw(app: tauri::AppHandle, source: String) -> Result<S
         return Err("升级失败，请查看日志".into());
     }
 
-    // 切换源后重装 Gateway 服务，更新 plist 中的路径
+    // 切换源后重装 Gateway 服务
     if current_source != source {
         let _ = app.emit("upgrade-log", "正在重装 Gateway 服务（更新启动路径）...");
         // 先停掉旧的
-        let uid = get_uid().unwrap_or(501);
-        let _ = Command::new("launchctl")
-            .args(["bootout", &format!("gui/{uid}/ai.openclaw.gateway")])
-            .output();
-        // 重新安装（生成新 plist）
-        let gw_out = Command::new("openclaw")
+        #[cfg(target_os = "macos")]
+        {
+            let uid = get_uid().unwrap_or(501);
+            let _ = Command::new("launchctl")
+                .args(["bootout", &format!("gui/{uid}/ai.openclaw.gateway")])
+                .output();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = openclaw_command()
+                .args(["gateway", "stop"])
+                .output();
+        }
+        // 重新安装
+        let gw_out = openclaw_command()
             .args(["gateway", "install"])
             .output();
         match gw_out {
@@ -265,6 +356,28 @@ pub fn check_installation() -> Result<Value, String> {
     let mut result = serde_json::Map::new();
     result.insert("installed".into(), Value::Bool(installed));
     result.insert("path".into(), Value::String(dir.to_string_lossy().to_string()));
+    Ok(Value::Object(result))
+}
+
+/// 检测 Node.js 是否已安装，返回版本号
+#[tauri::command]
+pub fn check_node() -> Result<Value, String> {
+    let mut result = serde_json::Map::new();
+    let mut cmd = Command::new("node");
+    cmd.arg("--version");
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    match cmd.output() {
+        Ok(o) if o.status.success() => {
+            let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            result.insert("installed".into(), Value::Bool(true));
+            result.insert("version".into(), Value::String(ver));
+        }
+        _ => {
+            result.insert("installed".into(), Value::Bool(false));
+            result.insert("version".into(), Value::Null);
+        }
+    }
     Ok(Value::Object(result))
 }
 
@@ -359,10 +472,14 @@ pub fn create_backup() -> Result<Value, String> {
     Ok(Value::Object(obj))
 }
 
+/// 检查备份文件名是否安全
+fn is_unsafe_backup_name(name: &str) -> bool {
+    name.contains("..") || name.contains('/') || name.contains('\\')
+}
+
 #[tauri::command]
 pub fn restore_backup(name: String) -> Result<(), String> {
-    // 安全检查
-    if name.contains("..") || name.contains('/') {
+    if is_unsafe_backup_name(&name) {
         return Err("非法文件名".into());
     }
     let backup_path = backups_dir().join(&name);
@@ -383,7 +500,7 @@ pub fn restore_backup(name: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn delete_backup(name: String) -> Result<(), String> {
-    if name.contains("..") || name.contains('/') {
+    if is_unsafe_backup_name(&name) {
         return Err("非法文件名".into());
     }
     let path = backups_dir().join(&name);
@@ -394,32 +511,63 @@ pub fn delete_backup(name: String) -> Result<(), String> {
         .map_err(|e| format!("删除失败: {e}"))
 }
 
-/// 获取当前用户 UID
+/// 获取当前用户 UID（macOS/Linux 用 id -u，Windows 返回 0）
+#[allow(dead_code)]
 fn get_uid() -> Result<u32, String> {
-    let output = Command::new("id")
-        .arg("-u")
-        .output()
-        .map_err(|e| format!("获取 UID 失败: {e}"))?;
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<u32>()
-        .map_err(|e| format!("解析 UID 失败: {e}"))
+    #[cfg(target_os = "windows")]
+    {
+        Ok(0)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let output = Command::new("id")
+            .arg("-u")
+            .output()
+            .map_err(|e| format!("获取 UID 失败: {e}"))?;
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| format!("解析 UID 失败: {e}"))
+    }
 }
 
-/// 重载 Gateway 服务（使用 kickstart -k 强制重启）
+/// 重载 Gateway 服务
+/// macOS: launchctl kickstart -k
+/// Windows/Linux: openclaw gateway restart
 #[tauri::command]
 pub fn reload_gateway() -> Result<String, String> {
-    let uid = get_uid()?;
-    let target = format!("gui/{uid}/ai.openclaw.gateway");
-    let output = Command::new("launchctl")
-        .args(["kickstart", "-k", &target])
-        .output()
-        .map_err(|e| format!("重载失败: {e}"))?;
-    if output.status.success() {
-        Ok("Gateway 已重载".to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("重载失败: {stderr}"))
+    #[cfg(target_os = "macos")]
+    {
+        let uid = get_uid()?;
+        let target = format!("gui/{uid}/ai.openclaw.gateway");
+        let output = Command::new("launchctl")
+            .args(["kickstart", "-k", &target])
+            .output()
+            .map_err(|e| format!("重载失败: {e}"))?;
+        if output.status.success() {
+            Ok("Gateway 已重载".to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("重载失败: {stderr}"))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let cli_check = openclaw_command().arg("--version").output();
+        match cli_check {
+            Ok(o) if o.status.success() => {}
+            _ => return Err("openclaw CLI 未安装，无法重载 Gateway".into()),
+        }
+        let output = openclaw_command()
+            .args(["gateway", "restart"])
+            .output()
+            .map_err(|e| format!("重载失败: {e}"))?;
+        if output.status.success() {
+            Ok("Gateway 已重载".to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("重载失败: {stderr}"))
+        }
     }
 }
 
@@ -564,7 +712,20 @@ pub async fn list_remote_models(
 /// 安装 Gateway 服务（执行 openclaw gateway install）
 #[tauri::command]
 pub fn install_gateway() -> Result<String, String> {
-    let output = Command::new("openclaw")
+    // 先检测 openclaw CLI 是否可用
+    let cli_check = openclaw_command().arg("--version").output();
+    match cli_check {
+        Ok(o) if o.status.success() => {}
+        _ => {
+            return Err(
+                "openclaw CLI 未安装。请先执行以下命令安装：\n\n\
+                 npm install -g @qingchencloud/openclaw-zh\n\n\
+                 安装完成后再点击此按钮安装 Gateway 服务。".into()
+            );
+        }
+    }
+
+    let output = openclaw_command()
         .args(["gateway", "install"])
         .output()
         .map_err(|e| format!("安装失败: {e}"))?;
@@ -577,23 +738,35 @@ pub fn install_gateway() -> Result<String, String> {
     }
 }
 
-/// 卸载 Gateway 服务（先 bootout 再删除 plist）
+/// 卸载 Gateway 服务
+/// macOS: launchctl bootout + 删除 plist
+/// Windows/Linux: openclaw gateway stop
 #[tauri::command]
 pub fn uninstall_gateway() -> Result<String, String> {
-    let uid = get_uid()?;
-    let target = format!("gui/{uid}/ai.openclaw.gateway");
+    #[cfg(target_os = "macos")]
+    {
+        let uid = get_uid()?;
+        let target = format!("gui/{uid}/ai.openclaw.gateway");
 
-    // 先停止服务
-    let _ = Command::new("launchctl")
-        .args(["bootout", &target])
-        .output();
+        // 先停止服务
+        let _ = Command::new("launchctl")
+            .args(["bootout", &target])
+            .output();
 
-    // 删除 plist 文件
-    let home = dirs::home_dir().unwrap_or_default();
-    let plist = home.join("Library/LaunchAgents/ai.openclaw.gateway.plist");
-    if plist.exists() {
-        fs::remove_file(&plist)
-            .map_err(|e| format!("删除 plist 失败: {e}"))?;
+        // 删除 plist 文件
+        let home = dirs::home_dir().unwrap_or_default();
+        let plist = home.join("Library/LaunchAgents/ai.openclaw.gateway.plist");
+        if plist.exists() {
+            fs::remove_file(&plist)
+                .map_err(|e| format!("删除 plist 失败: {e}"))?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Windows/Linux: 停止 Gateway 服务
+        let _ = openclaw_command()
+            .args(["gateway", "stop"])
+            .output();
     }
 
     Ok("Gateway 服务已卸载".to_string())

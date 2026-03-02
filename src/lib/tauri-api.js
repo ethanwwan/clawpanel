@@ -5,9 +5,14 @@
 
 const isTauri = !!window.__TAURI_INTERNALS__
 
+// 预加载 Tauri invoke，避免每次 API 调用都做动态 import
+const _invokeReady = isTauri
+  ? import('@tauri-apps/api/core').then(m => m.invoke)
+  : null
+
 async function invoke(cmd, args = {}) {
-  if (isTauri) {
-    const { invoke: tauriInvoke } = await import('@tauri-apps/api/core')
+  if (_invokeReady) {
+    const tauriInvoke = await _invokeReady
     return tauriInvoke(cmd, args)
   }
   return mockInvoke(cmd, args)
@@ -17,7 +22,7 @@ async function invoke(cmd, args = {}) {
 function mockInvoke(cmd, args) {
   const mocks = {
     get_services_status: () => [
-      { label: 'ai.openclaw.gateway', pid: null, running: false, description: 'OpenClaw Gateway' },
+      { label: 'ai.openclaw.gateway', pid: null, running: false, description: 'OpenClaw Gateway', cli_installed: true },
     ],
     get_version_info: () => ({
       current: '2026.2.23',
@@ -83,6 +88,7 @@ function mockInvoke(cmd, args) {
     delete_memory_file: () => true,
     export_memory_zip: ({ category }) => `/tmp/openclaw-${category}-20260226-160000.zip`,
     check_installation: () => ({ installed: true, path: '/usr/local/bin/openclaw', version: '2026.2.23' }),
+    check_node: () => ({ installed: true, version: 'v20.11.0' }),
     get_deploy_config: () => ({ gatewayUrl: 'http://127.0.0.1:18789', authToken: '', version: '2026.2.23' }),
     read_mcp_config: () => ({
       mcpServers: {
@@ -171,6 +177,7 @@ export const api = {
 
   // 安装/部署
   checkInstallation: () => invoke('check_installation'),
+  checkNode: () => invoke('check_node'),
   getDeployConfig: () => invoke('get_deploy_config'),
   writeEnvFile: (path, config) => invoke('write_env_file', { path, config }),
 

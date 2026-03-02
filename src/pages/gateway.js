@@ -13,7 +13,7 @@ export async function render() {
       <h1 class="page-title">Gateway 配置</h1>
       <p class="page-desc">Gateway 是 AI 模型的统一入口，所有应用通过它来调用模型服务</p>
     </div>
-    <div id="gateway-config">加载中...</div>
+    <div id="gateway-config" class="loading-text">加载中...</div>
     <div class="gw-save-bar">
       <button class="btn btn-primary" id="btn-save-gw">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
@@ -24,7 +24,8 @@ export async function render() {
   `
 
   const state = { config: null }
-  await loadConfig(page, state)
+  // 非阻塞：先返回 DOM，后台加载数据
+  loadConfig(page, state)
   page.querySelector('#btn-save-gw').onclick = async () => {
     const btn = page.querySelector('#btn-save-gw')
     btn.disabled = true

@@ -15,23 +15,12 @@ export async function render() {
   const page = document.createElement('div')
   page.className = 'page'
 
-  // 先获取 agent 列表
-  let agents = []
-  try {
-    agents = await api.listAgents()
-  } catch { agents = [{ id: 'main', identityName: '默认' }] }
-
-  const agentOptions = agents.map(a => {
-    const label = a.identityName ? a.identityName.split(',')[0].trim() : a.id
-    return `<option value="${a.id}">${a.id}${a.id !== label ? ' — ' + label : ''}</option>`
-  }).join('')
-
   page.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">记忆文件</h1>
       <div class="page-actions" style="display:flex;align-items:center;gap:var(--space-sm)">
         <label style="font-size:var(--font-size-sm);color:var(--text-tertiary)">Agent:</label>
-        <select class="form-input" id="agent-select" style="width:auto;min-width:140px">${agentOptions}</select>
+        <select class="form-input" id="agent-select" style="width:auto;min-width:140px"><option value="main">main</option></select>
       </div>
     </div>
     <div class="tab-bar">
@@ -47,7 +36,7 @@ export async function render() {
         <div style="padding:0 var(--space-sm) var(--space-sm)">
           <button class="btn btn-sm btn-secondary" id="btn-export-zip" style="width:100%">打包下载全部</button>
         </div>
-        <div id="file-tree">加载中...</div>
+        <div id="file-tree" class="loading-text">加载中...</div>
       </div>
       <div class="memory-editor">
         <div class="editor-toolbar">
@@ -64,6 +53,17 @@ export async function render() {
   `
 
   const state = { category: 'memory', currentPath: null, agentId: 'main' }
+
+  // 非阻塞加载 agent 列表，然后填充下拉框
+  api.listAgents().then(agents => {
+    const select = page.querySelector('#agent-select')
+    if (!select) return
+    const options = agents.map(a => {
+      const label = a.identityName ? a.identityName.split(',')[0].trim() : a.id
+      return `<option value="${a.id}">${a.id}${a.id !== label ? ' — ' + label : ''}</option>`
+    }).join('')
+    select.innerHTML = options
+  }).catch(() => {})
 
   // Agent 切换
   page.querySelector('#agent-select').onchange = (e) => {

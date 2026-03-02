@@ -1,11 +1,17 @@
 mod commands;
 mod models;
+mod tray;
+mod utils;
 
 use commands::{agent, config, device, extensions, logs, memory, service};
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            tray::setup_tray(app.handle())?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // 配置
             config::read_openclaw_config,
@@ -14,6 +20,7 @@ pub fn run() {
             config::write_mcp_config,
             config::get_version_info,
             config::check_installation,
+            config::check_node,
             config::write_env_file,
             config::list_backups,
             config::create_backup,

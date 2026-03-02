@@ -2,13 +2,20 @@
  * 极简 hash 路由
  */
 const routes = {}
+const _moduleCache = {}
 let _contentEl = null
 let _loadId = 0
 let _currentCleanup = null
 let _initialized = false
 
+let _defaultRoute = '/dashboard'
+
 export function registerRoute(path, loader) {
   routes[path] = loader
+}
+
+export function setDefaultRoute(path) {
+  _defaultRoute = path
 }
 
 export function navigate(path) {
@@ -25,7 +32,7 @@ export function initRouter(contentEl) {
 }
 
 async function loadRoute() {
-  const hash = window.location.hash.slice(1) || '/dashboard'
+  const hash = window.location.hash.slice(1) || _defaultRoute
   const loader = routes[hash]
   if (!loader || !_contentEl) return
 
@@ -38,18 +45,32 @@ async function loadRoute() {
     _currentCleanup = null
   }
 
-  _contentEl.innerHTML = ''
+  // 退出动画：如果有旧页面，播放退出动画后再替换
+  const oldPage = _contentEl.querySelector('.page, .page-loader, .chat-page')
+  if (oldPage) {
+    oldPage.classList.add('page-exit')
+    await new Promise(r => setTimeout(r, 100))
+    if (thisLoad !== _loadId) return
+  }
 
-  // 显示加载动画
-  const loader_el = document.createElement('div')
-  loader_el.className = 'page-loader'
-  loader_el.innerHTML = `
-    <div class="page-loader-spinner"></div>
-    <div class="page-loader-text">加载中...</div>
-  `
-  _contentEl.appendChild(loader_el)
+  // 已缓存的模块：跳过 spinner，直接渲染
+  let mod = _moduleCache[hash]
+  if (!mod) {
+    _contentEl.innerHTML = ''
+    // 仅首次加载显示 spinner
+    const spinnerEl = document.createElement('div')
+    spinnerEl.className = 'page-loader'
+    spinnerEl.innerHTML = `
+      <div class="page-loader-spinner"></div>
+      <div class="page-loader-text">加载中...</div>
+    `
+    _contentEl.appendChild(spinnerEl)
 
-  const mod = await loader()
+    mod = await loader()
+    _moduleCache[hash] = mod
+  } else {
+    _contentEl.innerHTML = ''
+  }
 
   // 如果加载期间路由又变了，丢弃本次结果
   if (thisLoad !== _loadId) return
@@ -57,7 +78,7 @@ async function loadRoute() {
   const page = mod.render ? await mod.render() : mod.default ? await mod.default() : mod
   if (thisLoad !== _loadId) return
 
-  // 移除加载动画，插入页面内容
+  // 插入页面内容
   _contentEl.innerHTML = ''
   if (typeof page === 'string') {
     _contentEl.innerHTML = page
@@ -75,5 +96,5 @@ async function loadRoute() {
 }
 
 export function getCurrentRoute() {
-  return window.location.hash.slice(1) || '/dashboard'
+  return window.location.hash.slice(1) || _defaultRoute
 }

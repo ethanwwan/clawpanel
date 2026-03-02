@@ -1,13 +1,13 @@
 /// Agent 管理命令 — 调用 openclaw CLI 实现增删改查
 use serde_json::Value;
-use std::process::Command;
 use std::fs;
 use std::io::Write;
+use crate::utils::openclaw_command;
 
 /// 获取 agent 列表
 #[tauri::command]
 pub fn list_agents() -> Result<Value, String> {
-    let output = Command::new("openclaw")
+    let output = openclaw_command()
         .args(["agents", "list", "--json"])
         .output()
         .map_err(|e| format!("执行失败: {e}"))?;
@@ -48,7 +48,7 @@ pub fn add_agent(name: String, model: String, workspace: Option<String>) -> Resu
         args.push(model);
     }
 
-    let output = Command::new("openclaw")
+    let output = openclaw_command()
         .args(&args)
         .output()
         .map_err(|e| format!("执行失败: {e}"))?;
@@ -71,7 +71,7 @@ pub fn delete_agent(id: String) -> Result<String, String> {
         return Err("不能删除默认 Agent".into());
     }
 
-    let output = Command::new("openclaw")
+    let output = openclaw_command()
         .args(["agents", "delete", &id])
         .output()
         .map_err(|e| format!("执行失败: {e}"))?;
@@ -112,7 +112,7 @@ pub fn update_agent_identity(
         }
     }
 
-    let output = Command::new("openclaw")
+    let output = openclaw_command()
         .args(&args)
         .output()
         .map_err(|e| format!("执行失败: {e}"))?;

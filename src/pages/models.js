@@ -64,11 +64,12 @@ export async function render() {
     <div style="margin-bottom:var(--space-md)">
       <input class="form-input" id="model-search" placeholder="搜索模型（按 ID 或名称过滤）" style="max-width:360px">
     </div>
-    <div id="providers-list">加载中...</div>
+    <div id="providers-list" class="loading-text">加载中...</div>
   `
 
   const state = { config: null, search: '', undoStack: [] }
-  await loadConfig(page, state)
+  // 非阻塞：先返回 DOM，后台加载数据
+  loadConfig(page, state)
   bindTopActions(page, state)
 
   // 搜索框实时过滤

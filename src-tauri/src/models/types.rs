@@ -6,6 +6,8 @@ pub struct ServiceStatus {
     pub pid: Option<u32>,
     pub running: bool,
     pub description: String,
+    /// CLI 工具是否已安装（Windows/Linux: openclaw CLI）
+    pub cli_installed: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
