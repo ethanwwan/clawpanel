@@ -1641,7 +1641,7 @@ pub async fn list_remote_models(
     // 解析 OpenAI / Anthropic / Gemini 格式的 /models 响应
     let ids = serde_json::from_str::<serde_json::Value>(&text)
         .ok()
-        .and_then(|v| {
+        .map(|v| {
             let mut ids: Vec<String> = if let Some(data) = v.get("data").and_then(|d| d.as_array())
             {
                 data.iter()
@@ -1659,7 +1659,7 @@ pub async fn list_remote_models(
                 vec![]
             };
             ids.sort();
-            Some(ids)
+            ids
         })
         .unwrap_or_default();
 
@@ -1973,9 +1973,9 @@ pub async fn auto_install_git(app: tauri::AppHandle) -> Result<String, String> {
             let _ = app.emit("upgrade-log", "Git 安装成功！");
             return Ok("Git 已通过 winget 安装".to_string());
         }
-        return Err(
+        Err(
             "winget 安装 Git 失败，请手动下载安装: https://git-scm.com/downloads".to_string(),
-        );
+        )
     }
 
     #[cfg(target_os = "macos")]
