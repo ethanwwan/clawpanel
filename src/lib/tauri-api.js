@@ -205,6 +205,7 @@ export const api = {
   // 面板配置 (clawpanel.json)
   readPanelConfig: () => invoke('read_panel_config'),
   writePanelConfig: (config) => invoke('write_panel_config', { config }),
+  testProxy: (url) => invoke('test_proxy', { url: url || null }),
 
   // 安装/部署
   checkInstallation: () => cachedInvoke('check_installation', {}, 60000),
@@ -212,7 +213,7 @@ export const api = {
   checkNode: () => cachedInvoke('check_node', {}, 60000),
   checkNodeAtPath: (nodeDir) => invoke('check_node_at_path', { nodeDir }),
   scanNodePaths: () => invoke('scan_node_paths'),
-  saveCustomNodePath: (nodeDir) => invoke('save_custom_node_path', { nodeDir }).then(r => { invalidate('check_node'); invoke('invalidate_path_cache').catch(() => {}); return r }),
+  saveCustomNodePath: (nodeDir) => invoke('save_custom_node_path', { nodeDir }).then(r => { invalidate('check_node', 'get_services_status'); invoke('invalidate_path_cache').catch(() => {}); return r }),
   invalidatePathCache: () => invoke('invalidate_path_cache'),
   checkGit: () => cachedInvoke('check_git', {}, 60000),
   autoInstallGit: () => invoke('auto_install_git'),

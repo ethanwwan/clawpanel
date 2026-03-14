@@ -112,6 +112,7 @@ pub async fn skills_install_dep(kind: String, spec: Value) -> Result<Value, Stri
 
     let mut cmd = tokio::process::Command::new(&program);
     cmd.args(&args).env("PATH", &path_env);
+    super::apply_proxy_env_tokio(&mut cmd);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x08000000);
     let output = cmd
@@ -152,6 +153,7 @@ pub async fn skills_clawhub_install(slug: String) -> Result<Value, String> {
     cmd.args(["-y", "clawhub", "install", &slug])
         .env("PATH", &path_env)
         .current_dir(&home);
+    super::apply_proxy_env_tokio(&mut cmd);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x08000000);
     let output = cmd
@@ -185,6 +187,7 @@ pub async fn skills_clawhub_search(query: String) -> Result<Value, String> {
     let mut cmd = tokio::process::Command::new("npx");
     cmd.args(["-y", "clawhub", "search", &q])
         .env("PATH", &path_env);
+    super::apply_proxy_env_tokio(&mut cmd);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x08000000);
     let output = cmd

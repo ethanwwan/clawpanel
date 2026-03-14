@@ -84,6 +84,12 @@ async function loadData(page) {
     const isInstalled = !!version.current
     const sourceLabel = version.source === 'official' ? '官方版' : '汉化版'
     const btnSm = 'padding:2px 8px;font-size:var(--font-size-xs)'
+    const hasRecommended = !!version.recommended
+    const aheadOfRecommended = isInstalled && hasRecommended && !!version.ahead_of_recommended
+    const driftFromRecommended = isInstalled && hasRecommended && !version.is_recommended && !aheadOfRecommended
+    const policyRiskHint = aheadOfRecommended
+      ? `检测到你本地安装的是高于推荐稳定版的 ${version.current}，可能存在接口、事件或配置兼容性问题。建议回退到 ${version.recommended}；如果你要继续使用高版本，请自行验证兼容性并关注 issue / release。`
+      : '当前面板默认只保证推荐稳定版的兼容性；如果你要尝试其他版本或预览版，请自行验证兼容性。若希望面板尽快支持最新版特性，欢迎提交 issue 告诉我们。'
 
     cards.innerHTML = `
       <div class="stat-card">
@@ -95,14 +101,23 @@ async function loadData(page) {
         <div class="stat-card-header"><span class="stat-card-label">OpenClaw · ${sourceLabel}</span></div>
         <div class="stat-card-value">${version.current || '未安装'}</div>
         <div class="stat-card-meta" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          ${isInstalled ? (version.update_available
-            ? `<span style="color:var(--accent)">新版本: ${version.latest}</span>
-               <button class="btn btn-primary btn-sm" id="btn-upgrade-latest" style="${btnSm}">升级到最新</button>`
-            : '<span style="color:var(--success)">已是最新</span>') : ''}
+          ${isInstalled && hasRecommended
+            ? (aheadOfRecommended
+              ? `<span style="color:var(--warning,#f59e0b)">当前版本高于推荐稳定版: ${version.recommended}</span>
+                 <button class="btn btn-primary btn-sm" id="btn-apply-recommended" style="${btnSm}">回退到推荐版</button>`
+              : driftFromRecommended
+              ? `<span style="color:var(--accent)">推荐稳定版: ${version.recommended}</span>
+                 <button class="btn btn-primary btn-sm" id="btn-apply-recommended" style="${btnSm}">切换到推荐版</button>`
+              : '<span style="color:var(--success)">已是推荐稳定版</span>')
+            : ''}
+          ${version.latest_update_available && version.latest ? `<span style="color:var(--text-tertiary)">最新上游: ${version.latest}</span>` : ''}
           <button class="btn btn-${isInstalled ? 'secondary' : 'primary'} btn-sm" id="btn-version-mgmt" style="${btnSm}">
             ${isInstalled ? '切换版本' : '安装 OpenClaw'}
           </button>
           ${isInstalled ? `<button class="btn btn-secondary btn-sm" id="btn-uninstall" style="${btnSm};color:var(--error)">卸载</button>` : ''}
+        </div>
+        <div style="margin-top:8px;font-size:var(--font-size-xs);color:var(--text-tertiary);line-height:1.6">
+          ${policyRiskHint}
         </div>
       </div>
       <div class="stat-card">
@@ -112,10 +127,9 @@ async function loadData(page) {
       </div>
     `
 
-    // 升级到最新
-    const upgLatestBtn = cards.querySelector('#btn-upgrade-latest')
-    if (upgLatestBtn) {
-      upgLatestBtn.onclick = () => doInstall(page, '升级 OpenClaw', version.source, null)
+    const applyRecommendedBtn = cards.querySelector('#btn-apply-recommended')
+    if (applyRecommendedBtn && version.recommended) {
+      applyRecommendedBtn.onclick = () => doInstall(page, aheadOfRecommended ? '回退到推荐稳定版' : '切换到推荐稳定版', version.source, version.recommended)
     }
 
     // 版本管理 / 安装
@@ -133,22 +147,25 @@ async function loadData(page) {
         const modal = showUpgradeModal('卸载 OpenClaw')
         modal.onClose(() => loadData(page))
         modal.appendLog('开始卸载 OpenClaw...')
-        let unlistenLog, unlistenProgress
+        let unlistenLog, unlistenProgress, unlistenDone, unlistenError
+        const cleanup = () => { unlistenLog?.(); unlistenProgress?.(); unlistenDone?.(); unlistenError?.() }
         try {
           if (window.__TAURI_INTERNALS__) {
-            try {
-              const { listen } = await import('@tauri-apps/api/event')
-              unlistenLog = await listen('upgrade-log', (e) => modal.appendLog(e.payload))
-              unlistenProgress = await listen('upgrade-progress', (e) => modal.setProgress(e.payload))
-            } catch {}
+            const { listen } = await import('@tauri-apps/api/event')
+            unlistenLog = await listen('upgrade-log', (e) => modal.appendLog(e.payload))
+            unlistenProgress = await listen('upgrade-progress', (e) => modal.setProgress(e.payload))
+            unlistenDone = await listen('upgrade-done', (e) => { cleanup(); modal.setDone(typeof e.payload === 'string' ? e.payload : '卸载完成') })
+            unlistenError = await listen('upgrade-error', (e) => { cleanup(); modal.setError('卸载失败: ' + (e.payload || '未知错误')) })
+            await api.uninstallOpenclaw(false)
+            modal.appendLog('后台卸载任务已启动...')
+          } else {
+            const msg = await api.uninstallOpenclaw(false)
+            modal.setDone(typeof msg === 'string' ? msg : '卸载完成')
+            cleanup()
           }
-          const msg = await api.uninstallOpenclaw(false)
-          modal.setDone(typeof msg === 'string' ? msg : '卸载完成')
         } catch (e) {
+          cleanup()
           modal.setError('卸载失败: ' + (e?.message || e))
-        } finally {
-          unlistenLog?.()
-          unlistenProgress?.()
         }
       }
     }
@@ -186,6 +203,9 @@ async function showVersionPicker(page, currentVersion) {
           <select id="oc-version-select" class="input" style="width:100%;padding:8px 12px;font-size:var(--font-size-sm)">
             <option value="">加载中...</option>
           </select>
+        </div>
+        <div style="font-size:var(--font-size-xs);color:var(--text-tertiary);line-height:1.6;padding:10px 12px;border-radius:8px;background:var(--bg-tertiary)">
+          默认建议使用当前面板绑定的推荐稳定版。若手动切换到其它版本，尤其是预览版/最新版，请自行验证兼容性；如果你希望面板优先适配最新版功能，欢迎提交 issue。
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;min-height:18px">
           <div id="oc-action-hint" style="font-size:var(--font-size-xs);color:var(--text-tertiary)"></div>
@@ -227,19 +247,20 @@ async function showVersionPicker(page, currentVersion) {
     const targetSource = currentSelect
     const targetVer = select.value
     if (!targetVer || targetVer === '') { hintEl.textContent = ''; confirmBtn.disabled = true; return }
+    const targetTag = select.selectedIndex === 0 ? '（推荐稳定版）' : '（需自测兼容性）'
 
     const sameSource = targetSource === (currentVersion.source === 'official' ? 'official' : 'chinese')
 
     if (!isInstalled) {
       confirmBtn.textContent = '安装'
-      hintEl.textContent = `将安装 ${targetSource === 'official' ? '原版' : '汉化版'} ${targetVer}`
+      hintEl.textContent = `将安装 ${targetSource === 'official' ? '原版' : '汉化版'} ${targetVer}${targetTag}`
       confirmBtn.disabled = false
       return
     }
 
     if (!sameSource) {
       confirmBtn.textContent = '切换'
-      hintEl.innerHTML = `当前: <strong>${currentVersion.source === 'official' ? '原版' : '汉化版'} ${currentVersion.current}</strong> → <strong>${targetSource === 'official' ? '原版' : '汉化版'} ${targetVer}</strong>`
+      hintEl.innerHTML = `当前: <strong>${currentVersion.source === 'official' ? '原版' : '汉化版'} ${currentVersion.current}</strong> → <strong>${targetSource === 'official' ? '原版' : '汉化版'} ${targetVer}</strong>${targetTag}`
       confirmBtn.disabled = false
       return
     }
@@ -256,15 +277,15 @@ async function showVersionPicker(page, currentVersion) {
 
     if (cmp === 0) {
       confirmBtn.textContent = '重新安装'
-      hintEl.textContent = `当前已是 ${targetVer}`
+      hintEl.textContent = `当前已是 ${targetVer}${targetTag}`
       confirmBtn.disabled = false
     } else if (cmp > 0) {
       confirmBtn.textContent = '升级'
-      hintEl.innerHTML = `<span style="color:var(--accent)">${currentVersion.current} → ${targetVer}</span>`
+      hintEl.innerHTML = `<span style="color:var(--accent)">${currentVersion.current} → ${targetVer}${targetTag}</span>`
       confirmBtn.disabled = false
     } else {
       confirmBtn.textContent = '降级'
-      hintEl.innerHTML = `<span style="color:var(--warning,#f59e0b)">${currentVersion.current} → ${targetVer}</span>`
+      hintEl.innerHTML = `<span style="color:var(--warning,#f59e0b)">${currentVersion.current} → ${targetVer}${targetTag}</span>`
       confirmBtn.disabled = false
     }
   }
@@ -287,9 +308,9 @@ async function showVersionPicker(page, currentVersion) {
       const stable = allVersions.filter(v => !v.includes('nightly') && !v.includes('canary') && !v.includes('alpha') && !v.includes('beta') && !v.includes('rc') && !v.includes('dev') && !v.includes('next'))
       const versions = showNightly ? allVersions : (stable.length > 0 ? stable : allVersions)
       const nightlyCount = allVersions.length - stable.length
-      select.innerHTML = versions.map(v => {
+      select.innerHTML = versions.map((v, idx) => {
         const isCurrent = isInstalled && v === currentVersion.current && source === (currentVersion.source === 'official' ? 'official' : 'chinese')
-        return `<option value="${v}">${v}${isCurrent ? ' (当前)' : ''}</option>`
+        return `<option value="${v}">${v}${idx === 0 ? ' (推荐)' : ''}${isCurrent ? ' (当前)' : ''}</option>`
       }).join('')
       // nightly 切换提示
       const toggleEl = overlay.querySelector('#nightly-toggle')
@@ -338,42 +359,57 @@ async function showVersionPicker(page, currentVersion) {
 async function doInstall(page, title, source, version) {
   const modal = showUpgradeModal(title)
   modal.onClose(() => loadData(page))
-  let unlistenLog, unlistenProgress
+  let unlistenLog, unlistenProgress, unlistenDone, unlistenError
   setUpgrading(true)
+
+  const cleanup = () => {
+    setUpgrading(false)
+    unlistenLog?.(); unlistenProgress?.(); unlistenDone?.(); unlistenError?.()
+  }
+
   try {
     if (window.__TAURI_INTERNALS__) {
-      try {
-        const { listen } = await import('@tauri-apps/api/event')
-        unlistenLog = await listen('upgrade-log', (e) => modal.appendLog(e.payload))
-        unlistenProgress = await listen('upgrade-progress', (e) => modal.setProgress(e.payload))
-      } catch {}
+      const { listen } = await import('@tauri-apps/api/event')
+      unlistenLog = await listen('upgrade-log', (e) => modal.appendLog(e.payload))
+      unlistenProgress = await listen('upgrade-progress', (e) => modal.setProgress(e.payload))
+
+      unlistenDone = await listen('upgrade-done', (e) => {
+        cleanup()
+        modal.setDone(typeof e.payload === 'string' ? e.payload : '操作完成')
+      })
+
+      unlistenError = await listen('upgrade-error', async (e) => {
+        cleanup()
+        const errStr = String(e.payload || '未知错误')
+        modal.appendLog(errStr)
+        const { diagnoseInstallError } = await import('../lib/error-diagnosis.js')
+        const fullLog = modal.getLogText() + '\n' + errStr
+        const diagnosis = diagnoseInstallError(fullLog)
+        modal.setError(diagnosis.title)
+        if (diagnosis.hint) modal.appendLog('')
+        if (diagnosis.hint) modal.appendHtmlLog(`${statusIcon('info', 14)} ${diagnosis.hint}`)
+        if (diagnosis.command) modal.appendHtmlLog(`${icon('clipboard', 14)} ${diagnosis.command}`)
+        if (window.__openAIDrawerWithError) {
+          window.__openAIDrawerWithError({ title: diagnosis.title, error: fullLog, scene: title, hint: diagnosis.hint })
+        }
+      })
+
+      await api.upgradeOpenclaw(source, version)
+      modal.appendLog('后台任务已启动，请等待完成...')
     } else {
       modal.appendLog('Web 模式：安装过程日志不可用，请等待完成...')
+      const msg = await api.upgradeOpenclaw(source, version)
+      modal.setDone(typeof msg === 'string' ? msg : (msg?.message || '操作完成'))
+      cleanup()
     }
-    const msg = await api.upgradeOpenclaw(source, version)
-    modal.setDone(typeof msg === 'string' ? msg : (msg?.message || '操作完成'))
   } catch (e) {
+    cleanup()
     const errStr = String(e)
     modal.appendLog(errStr)
     const { diagnoseInstallError } = await import('../lib/error-diagnosis.js')
     const fullLog = modal.getLogText() + '\n' + errStr
     const diagnosis = diagnoseInstallError(fullLog)
     modal.setError(diagnosis.title)
-    if (diagnosis.hint) modal.appendLog('')
-    if (diagnosis.hint) modal.appendHtmlLog(`${statusIcon('info', 14)} ${diagnosis.hint}`)
-    if (diagnosis.command) modal.appendHtmlLog(`${icon('clipboard', 14)} ${diagnosis.command}`)
-    if (window.__openAIDrawerWithError) {
-      window.__openAIDrawerWithError({
-        title: diagnosis.title,
-        error: fullLog,
-        scene: title,
-        hint: diagnosis.hint,
-      })
-    }
-  } finally {
-    setUpgrading(false)
-    unlistenLog?.()
-    unlistenProgress?.()
   }
 }
 

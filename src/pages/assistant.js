@@ -2734,6 +2734,11 @@ function showSettings() {
       baseUrlInput.value = btn.dataset.url
       apiTypeSelect.value = btn.dataset.api
       apiTypeSelect.dispatchEvent(new Event('change'))
+      // 切换服务商时清空模型和下拉列表，让用户重新选择或拉取
+      const modelInput = overlay.querySelector('#ast-model')
+      const modelDropdown = overlay.querySelector('#ast-model-dropdown')
+      if (modelInput) modelInput.value = ''
+      if (modelDropdown) { modelDropdown.innerHTML = ''; modelDropdown.style.display = 'none' }
       // 高亮选中
       overlay.querySelectorAll('.ast-preset-btn').forEach(b => b.style.opacity = '0.5')
       btn.style.opacity = '1'

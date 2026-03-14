@@ -197,7 +197,7 @@ export function showUpgradeModal(title) {
       </div>
       <div class="upgrade-log-box"></div>
       <div class="modal-actions">
-        <button class="btn btn-secondary btn-sm" data-action="close" disabled>关闭</button>
+        <button class="btn btn-secondary btn-sm" data-action="close">关闭</button>
       </div>
     </div>
   `
@@ -210,9 +210,51 @@ export function showUpgradeModal(title) {
   const _logLines = []
 
   let _onClose = null
-  closeBtn.onclick = () => { overlay.remove(); _onClose?.() }
+  let _finished = false
+  let _taskBar = null
+
+  // 重新打开弹窗（从任务状态栏点击时）
+  function reopenModal() {
+    if (_taskBar) { _taskBar.remove(); _taskBar = null }
+    document.body.appendChild(overlay)
+  }
+
+  // 关闭弹窗：未完成时显示任务状态栏
+  function closeModal() {
+    overlay.remove()
+    if (!_finished) {
+      showTaskBar()
+    } else {
+      if (_taskBar) { _taskBar.remove(); _taskBar = null }
+      _onClose?.()
+    }
+  }
+
+  // 全局任务状态栏：关闭弹窗后显示在页面顶部
+  function showTaskBar() {
+    if (_taskBar) return
+    _taskBar = document.createElement('div')
+    _taskBar.className = 'upgrade-task-bar'
+    _taskBar.innerHTML = `
+      <span class="upgrade-task-bar-text">${text.textContent}</span>
+      <button class="btn btn-sm upgrade-task-bar-open">查看详情</button>
+      <button class="btn btn-sm btn-ghost upgrade-task-bar-dismiss">×</button>
+    `
+    _taskBar.querySelector('.upgrade-task-bar-open').onclick = reopenModal
+    _taskBar.querySelector('.upgrade-task-bar-dismiss').onclick = () => { _taskBar.remove(); _taskBar = null }
+    document.body.appendChild(_taskBar)
+  }
+
+  function updateTaskBar(statusText) {
+    if (_taskBar) {
+      const span = _taskBar.querySelector('.upgrade-task-bar-text')
+      if (span) span.textContent = statusText
+    }
+  }
+
+  closeBtn.onclick = closeModal
   overlay.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !closeBtn.disabled) { overlay.remove(); _onClose?.() }
+    if (e.key === 'Escape') closeModal()
   })
 
   return {
@@ -233,25 +275,33 @@ export function showUpgradeModal(title) {
     getLogText() { return _logLines.join('\n') },
     setProgress(pct) {
       fill.style.width = pct + '%'
-      if (pct >= 100) text.textContent = '完成'
-      else if (pct >= 75) text.textContent = '正在安装...'
-      else if (pct >= 30) text.textContent = '正在下载依赖...'
-      else text.textContent = '准备中...'
+      let statusText
+      if (pct >= 100) statusText = '完成'
+      else if (pct >= 75) statusText = '正在安装...'
+      else if (pct >= 30) statusText = '正在下载依赖...'
+      else statusText = '准备中...'
+      text.textContent = statusText
+      updateTaskBar(statusText)
     },
     setDone(msg) {
+      _finished = true
       text.textContent = msg || '升级完成'
       fill.style.width = '100%'
       fill.classList.add('done')
-      closeBtn.disabled = false
+      if (_taskBar) { _taskBar.remove(); _taskBar = null }
       closeBtn.focus()
     },
     setError(msg) {
+      _finished = true
       text.textContent = msg || '升级失败'
       fill.classList.add('error')
-      closeBtn.disabled = false
+      if (_taskBar) {
+        const span = _taskBar.querySelector('.upgrade-task-bar-text')
+        if (span) { span.textContent = msg || '升级失败'; span.style.color = 'var(--error)' }
+      }
       closeBtn.focus()
     },
     onClose(fn) { _onClose = fn },
-    destroy() { overlay.remove(); _onClose?.() },
+    destroy() { overlay.remove(); if (_taskBar) { _taskBar.remove(); _taskBar = null } _onClose?.() },
   }
 }

@@ -117,6 +117,9 @@ function renderStatCards(page, services, version, agents, config) {
   const cardsEl = page.querySelector('#stat-cards')
   const gw = services.find(s => s.label === 'ai.openclaw.gateway')
   const runningCount = services.filter(s => s.running).length
+  const versionMeta = version.recommended
+    ? `${version.ahead_of_recommended ? `当前版本高于推荐稳定版 ${version.recommended}，可能不稳定` : version.is_recommended ? '稳定版 ' + version.recommended : '推荐稳定版 ' + version.recommended}${version.latest_update_available && version.latest ? ' · 最新上游 ' + version.latest : ''}`
+    : (version.latest_update_available && version.latest ? '最新上游: ' + version.latest : '版本信息未获取')
 
   const defaultAgent = agents.find(a => a.id === 'main')?.name || 'main'
   const modelCount = config?.models?.providers ? Object.values(config.models.providers).reduce((acc, p) => acc + (p.models?.length || 0), 0) : 0
@@ -136,7 +139,7 @@ function renderStatCards(page, services, version, agents, config) {
         <span class="stat-card-label">版本 · ${version.source === 'official' ? '官方' : '汉化'}</span>
       </div>
       <div class="stat-card-value">${version.current || '未知'}</div>
-      <div class="stat-card-meta">${version.update_available ? '有新版本: ' + version.latest : '已是最新'}</div>
+      <div class="stat-card-meta">${versionMeta}</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-header">
@@ -439,10 +442,14 @@ function bindActions(page) {
     btnUpdate.textContent = '检查中...'
     try {
       const info = await api.getVersionInfo()
-      if (info.update_available) {
-        toast(`发现新版本: ${info.latest}`, 'info')
+      if (info.ahead_of_recommended && info.recommended) {
+        toast(`当前本地版本 ${info.current || ''} 高于推荐稳定版 ${info.recommended}，可能存在兼容风险`, 'warning')
+      } else if (info.update_available && info.recommended) {
+        toast(`发现推荐稳定版: ${info.recommended}`, 'info')
+      } else if (info.latest_update_available && info.latest) {
+        toast(`已对齐推荐稳定版，最新上游为 ${info.latest}`, 'info')
       } else {
-        toast('已是最新版本', 'success')
+        toast('已对齐推荐稳定版', 'success')
       }
     } catch (e) {
       toast('检查更新失败: ' + e, 'error')

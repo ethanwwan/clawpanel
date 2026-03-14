@@ -158,8 +158,11 @@ function renderDebugInfo(el, info) {
   } else if (info.version) {
     html += `<table class="debug-table">
       <tr><td>当前版本</td><td>${info.version.current || '(未知)'}</td></tr>
-      <tr><td>最新版本</td><td>${info.version.latest || '(未检测)'}</td></tr>
-      <tr><td>更新可用</td><td>${info.version.update_available ? `${statusIcon('warn')} 有新版本` : `${statusIcon('ok')} 已是最新`}</td></tr>
+      <tr><td>推荐稳定版</td><td>${info.version.recommended || '(未检测)'}</td></tr>
+      <tr><td>面板版本</td><td>${info.version.panel_version || '(未知)'}</td></tr>
+      <tr><td>最新上游</td><td>${info.version.latest || '(未检测)'}</td></tr>
+      <tr><td>偏离推荐版</td><td>${info.version.ahead_of_recommended ? `${statusIcon('warn')} 当前版本过高，建议回退` : info.version.is_recommended ? `${statusIcon('ok')} 已对齐` : `${statusIcon('warn')} 需要切换`}</td></tr>
+      <tr><td>最新上游可用</td><td>${info.version.latest_update_available ? `${statusIcon('warn')} 有更新` : `${statusIcon('ok')} 无更新`}</td></tr>
     </table>`
   }
   html += `</div>`

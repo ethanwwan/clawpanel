@@ -91,6 +91,7 @@ pub fn run() {
             config::check_panel_update,
             config::read_panel_config,
             config::write_panel_config,
+            config::test_proxy,
             config::get_npm_registry,
             config::set_npm_registry,
             config::check_git,

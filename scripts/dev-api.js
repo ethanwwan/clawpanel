@@ -33,6 +33,22 @@ const DOCKER_NODES_PATH = path.join(OPENCLAW_DIR, 'docker-nodes.json')
 const INSTANCES_PATH = path.join(OPENCLAW_DIR, 'instances.json')
 const DOCKER_SOCKET = process.platform === 'win32' ? '//./pipe/docker_engine' : '/var/run/docker.sock'
 const OPENCLAW_IMAGE = 'ghcr.io/qingchencloud/openclaw'
+const PANEL_VERSION = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dev_dirname, '..', 'package.json'), 'utf8')).version || '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+})()
+const VERSION_POLICY_PATH = path.join(__dev_dirname, '..', 'openclaw-version-policy.json')
+const GIT_HTTPS_REWRITES = [
+  'ssh://git@github.com/',
+  'ssh://git@github.com',
+  'ssh://git@://github.com/',
+  'git@github.com:',
+  'git://github.com/',
+  'git+ssh://git@github.com/'
+]
 
 // === 异步任务存储 ===
 const _taskStore = new Map()   // taskId → task object
@@ -64,21 +80,175 @@ function createTask(containerId, containerName, nodeId, message) {
 }
 
 // 语义化版本比较
-function versionGe(a, b) {
-  const pa = a.split('.').map(Number), pb = b.split('.').map(Number)
+function parseVersion(value) {
+  return String(value || '').split(/[^0-9]/).filter(Boolean).map(Number)
+}
+function versionCompare(a, b) {
+  const pa = parseVersion(a), pb = parseVersion(b)
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if ((pa[i] || 0) > (pb[i] || 0)) return true
-    if ((pa[i] || 0) < (pb[i] || 0)) return false
+    if ((pa[i] || 0) > (pb[i] || 0)) return 1
+    if ((pa[i] || 0) < (pb[i] || 0)) return -1
   }
-  return true
+  return 0
+}
+function versionGe(a, b) {
+  return versionCompare(a, b) >= 0
 }
 function versionGt(a, b) {
-  const pa = a.split('.').map(Number), pb = b.split('.').map(Number)
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if ((pa[i] || 0) > (pb[i] || 0)) return true
-    if ((pa[i] || 0) < (pb[i] || 0)) return false
+  return versionCompare(a, b) > 0
+}
+
+// 提取基础版本号（去掉 -zh.x / -nightly.xxx 等后缀）
+function baseVersion(v) {
+  return String(v || '').split('-')[0]
+}
+
+// 判断 CLI 版本是否与推荐版匹配（考虑汉化版 -zh.x 后缀差异）
+function versionsMatch(cliVer, recommended) {
+  if (cliVer === recommended) return true
+  return baseVersion(cliVer) === baseVersion(recommended)
+}
+
+// 判断推荐版是否真的比当前版本更新（忽略 -zh.x 后缀）
+function recommendedIsNewer(recommended, current) {
+  return versionGt(baseVersion(recommended), baseVersion(current))
+}
+
+function loadVersionPolicy() {
+  try {
+    return JSON.parse(fs.readFileSync(VERSION_POLICY_PATH, 'utf8'))
+  } catch {
+    return {}
   }
-  return false
+}
+
+function recommendedVersionFor(source = 'chinese') {
+  const policy = loadVersionPolicy()
+  return policy?.panels?.[PANEL_VERSION]?.[source]?.recommended
+    || policy?.default?.[source]?.recommended
+    || null
+}
+
+function npmPackageName(source = 'chinese') {
+  return source === 'official' ? 'openclaw' : '@qingchencloud/openclaw-zh'
+}
+
+function getConfiguredNpmRegistry() {
+  const regFile = path.join(OPENCLAW_DIR, 'npm-registry.txt')
+  try {
+    if (fs.existsSync(regFile)) {
+      const value = fs.readFileSync(regFile, 'utf8').trim()
+      if (value) return value
+    }
+  } catch {}
+  return 'https://registry.npmmirror.com'
+}
+
+function pickRegistryForPackage(pkg) {
+  const configured = getConfiguredNpmRegistry()
+  if (pkg.includes('openclaw-zh')) {
+    if (configured.includes('npmmirror.com') || configured.includes('npmjs.org')) return configured
+    return 'https://registry.npmjs.org'
+  }
+  return configured
+}
+
+function configureGitHttpsRules() {
+  try { execSync('git config --global --unset-all url.https://github.com/.insteadOf 2>&1', { timeout: 5000, windowsHide: true }) } catch {}
+  let success = 0
+  for (const from of GIT_HTTPS_REWRITES) {
+    try {
+      execSync(`git config --global --add url.https://github.com/.insteadOf "${from}"`, { timeout: 5000, windowsHide: true })
+      success++
+    } catch {}
+  }
+  return success
+}
+
+function buildGitInstallEnv() {
+  const env = {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o IdentitiesOnly=yes',
+    GIT_ALLOW_PROTOCOL: 'https:http:file',
+    GIT_CONFIG_COUNT: String(GIT_HTTPS_REWRITES.length),
+  }
+  GIT_HTTPS_REWRITES.forEach((from, idx) => {
+    env[`GIT_CONFIG_KEY_${idx}`] = 'url.https://github.com/.insteadOf'
+    env[`GIT_CONFIG_VALUE_${idx}`] = from
+  })
+  return env
+}
+
+function detectInstalledSource() {
+  if (isMac) {
+    try {
+      const target = fs.readlinkSync('/opt/homebrew/bin/openclaw')
+      if (String(target).includes('openclaw-zh')) return 'chinese'
+      return 'official'
+    } catch {}
+  }
+  if (isWindows) {
+    try {
+      const appdata = process.env.APPDATA
+      if (appdata) {
+        const zhDir = path.join(appdata, 'npm', 'node_modules', '@qingchencloud', 'openclaw-zh')
+        if (fs.existsSync(zhDir)) return 'chinese'
+      }
+    } catch {}
+    return 'official'
+  }
+  try {
+    const npmBin = isWindows ? 'npm.cmd' : 'npm'
+    const out = execSync(`${npmBin} list -g @qingchencloud/openclaw-zh --depth=0 2>&1`, { timeout: 10000, windowsHide: true }).toString()
+    if (out.includes('openclaw-zh@')) return 'chinese'
+  } catch {}
+  return 'official'
+}
+
+function getLocalOpenclawVersion() {
+  let current = null
+  if (isMac) {
+    try {
+      const target = fs.readlinkSync('/opt/homebrew/bin/openclaw')
+      const pkgPath = path.resolve('/opt/homebrew/bin', target, '..', 'package.json')
+      current = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
+    } catch {}
+  }
+  if (!current && isWindows) {
+    try {
+      const appdata = process.env.APPDATA
+      if (appdata) {
+        for (const pkg of [path.join('@qingchencloud', 'openclaw-zh'), 'openclaw']) {
+          const pkgPath = path.join(appdata, 'npm', 'node_modules', pkg, 'package.json')
+          if (fs.existsSync(pkgPath)) {
+            current = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
+            if (current) break
+          }
+        }
+      }
+    } catch {}
+  }
+  if (!current) {
+    try { current = execSync('openclaw --version 2>&1', { windowsHide: true }).toString().trim().split(/\s+/).pop() } catch {}
+  }
+  return current || null
+}
+
+async function getLatestVersionFor(source = 'chinese') {
+  const pkg = npmPackageName(source)
+  const encodedPkg = pkg.replace('/', '%2F').replace('@', '%40')
+  const firstRegistry = pickRegistryForPackage(pkg)
+  const registries = [...new Set([firstRegistry, 'https://registry.npmjs.org'])]
+  for (const registry of registries) {
+    try {
+      const resp = await fetch(`${registry}/${encodedPkg}/latest`, { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(10000) })
+      if (!resp.ok) continue
+      const data = await resp.json()
+      if (data?.version) return data.version
+    } catch {}
+  }
+  return null
 }
 
 // === 访问密码 & Session 管理 ===
@@ -2356,13 +2526,9 @@ const handlers = {
 
   configure_git_https() {
     try {
-      const cmds = [
-        'git config --global url."https://github.com/".insteadOf "git@github.com:"',
-        'git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"',
-        'git config --global url."https://github.com/".insteadOf "git://github.com/"',
-      ]
-      for (const cmd of cmds) execSync(cmd, { timeout: 5000, windowsHide: true })
-      return '已配置 Git HTTPS 替代 SSH'
+      const success = configureGitHttpsRules()
+      if (!success) throw new Error('Git 未安装或写入失败')
+      return `已配置 Git HTTPS 替代 SSH（${success}/${GIT_HTTPS_REWRITES.length} 条规则）`
     } catch (e) {
       throw new Error('配置失败: ' + (e.message || e))
     }
@@ -2408,19 +2574,22 @@ const handlers = {
   },
 
   // 版本信息
-  get_version_info() {
-    let current = null
-    if (isMac) {
-      try {
-        const target = fs.readlinkSync('/opt/homebrew/bin/openclaw')
-        const pkgPath = path.resolve('/opt/homebrew/bin', target, '..', 'package.json')
-        current = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
-      } catch {}
+  async get_version_info() {
+    const source = detectInstalledSource()
+    const current = getLocalOpenclawVersion()
+    const latest = await getLatestVersionFor(source)
+    const recommended = recommendedVersionFor(source)
+    return {
+      current,
+      latest,
+      recommended,
+      update_available: current && recommended ? recommendedIsNewer(recommended, current) : !!recommended,
+      latest_update_available: current && latest ? recommendedIsNewer(latest, current) : !!latest,
+      is_recommended: !!current && !!recommended && versionsMatch(current, recommended),
+      ahead_of_recommended: !!current && !!recommended && recommendedIsNewer(current, recommended),
+      panel_version: PANEL_VERSION,
+      source
     }
-    if (!current) {
-      try { current = execSync('openclaw --version 2>&1', { windowsHide: true }).toString().trim().split(/\s+/).pop() } catch {}
-    }
-    return { current, latest: null, update_available: false, source: 'chinese' }
   },
 
   // 模型测试
@@ -2429,8 +2598,8 @@ const handlers = {
       : apiType === 'google-gemini' ? 'google-gemini'
       : 'openai-completions'
     let base = _normalizeBaseUrl(baseUrl)
+    // 仅 Anthropic 强制补 /v1，OpenAI 兼容类不强制（火山引擎等用 /v3）
     if (type === 'anthropic-messages' && !/\/v1$/i.test(base)) base += '/v1'
-    else if (type === 'openai-completions' && !/\/v1$/i.test(base)) base += '/v1'
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 30000)
     try {
@@ -2499,8 +2668,8 @@ const handlers = {
       : apiType === 'google-gemini' ? 'google-gemini'
       : 'openai-completions'
     let base = _normalizeBaseUrl(baseUrl)
+    // 仅 Anthropic 强制补 /v1，OpenAI 兼容类不强制（火山引擎等用 /v3）
     if (type === 'anthropic-messages' && !/\/v1$/i.test(base)) base += '/v1'
-    else if (type === 'openai-completions' && !/\/v1$/i.test(base)) base += '/v1'
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 15000)
     try {
@@ -2699,49 +2868,73 @@ const handlers = {
   },
 
   async list_openclaw_versions({ source = 'chinese' } = {}) {
-    const pkg = source === 'official' ? 'openclaw' : '@qingchencloud/openclaw-zh'
-    const encodedPkg = pkg.replace('/', '%2F')
-    const registry = 'https://registry.npmmirror.com'
-    try {
-      const resp = await fetch(`${registry}/${encodedPkg}`, { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(10000) })
-      const data = await resp.json()
-      const versions = Object.keys(data.versions || {})
-      versions.sort((a, b) => {
-        const pa = a.split(/[^0-9]/).filter(Boolean).map(Number)
-        const pb = b.split(/[^0-9]/).filter(Boolean).map(Number)
-        for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-          if ((pb[i] || 0) !== (pa[i] || 0)) return (pb[i] || 0) - (pa[i] || 0)
+    const pkg = npmPackageName(source)
+    const encodedPkg = pkg.replace('/', '%2F').replace('@', '%40')
+    const firstRegistry = pickRegistryForPackage(pkg)
+    const registries = [...new Set([firstRegistry, 'https://registry.npmjs.org'])]
+    let lastError = null
+    for (const registry of registries) {
+      try {
+        const resp = await fetch(`${registry}/${encodedPkg}`, { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(10000) })
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const data = await resp.json()
+        const versions = Object.keys(data.versions || {})
+        versions.sort((a, b) => versionCompare(b, a))
+        const recommended = recommendedVersionFor(source)
+        if (recommended) {
+          const pos = versions.indexOf(recommended)
+          if (pos >= 0) {
+            versions.splice(pos, 1)
+            versions.unshift(recommended)
+          } else {
+            versions.unshift(recommended)
+          }
         }
-        return 0
-      })
-      return versions
-    } catch (e) {
-      throw new Error('查询版本失败: ' + e.message)
+        return versions
+      } catch (e) {
+        lastError = e
+      }
     }
+    throw new Error('查询版本失败: ' + (lastError?.message || lastError || 'unknown error'))
   },
 
   upgrade_openclaw({ source = 'chinese', version } = {}) {
-    const OPENCLAW_DIR = path.join(homedir(), '.openclaw')
-    const pkg = source === 'official' ? 'openclaw' : '@qingchencloud/openclaw-zh'
-    const ver = version || 'latest'
+    const currentSource = detectInstalledSource()
+    const pkg = npmPackageName(source)
+    const recommended = recommendedVersionFor(source)
+    const ver = version || recommended || 'latest'
+    const oldPkg = npmPackageName(currentSource)
+    const needUninstallOld = currentSource !== source
     const npmBin = isWindows ? 'npm.cmd' : 'npm'
-    // Configure Git HTTPS before npm install to prevent SSH auth failures
-    try { execSync('git config --global --unset-all url.https://github.com/.insteadOf 2>&1', { windowsHide: true }) } catch {}
-    for (const from of ['ssh://git@github.com/', 'git@github.com:', 'git://github.com/', 'git+ssh://git@github.com/']) {
-      try { execSync(`git config --global --add url.https://github.com/.insteadOf "${from}"`, { windowsHide: true }) } catch {}
+    const registry = pickRegistryForPackage(pkg)
+    const gitConfigured = configureGitHttpsRules()
+    const gitEnv = buildGitInstallEnv()
+    const logs = []
+    if (!version && recommended) {
+      logs.push(`ClawPanel ${PANEL_VERSION} 默认绑定 OpenClaw 稳定版: ${recommended}`)
     }
-    const gitEnv = {
-      GIT_TERMINAL_PROMPT: '0',
-      GIT_CONFIG_COUNT: '4',
-      GIT_CONFIG_KEY_0: 'url.https://github.com/.insteadOf', GIT_CONFIG_VALUE_0: 'ssh://git@github.com/',
-      GIT_CONFIG_KEY_1: 'url.https://github.com/.insteadOf', GIT_CONFIG_VALUE_1: 'git@github.com:',
-      GIT_CONFIG_KEY_2: 'url.https://github.com/.insteadOf', GIT_CONFIG_VALUE_2: 'git://github.com/',
-      GIT_CONFIG_KEY_3: 'url.https://github.com/.insteadOf', GIT_CONFIG_VALUE_3: 'git+ssh://git@github.com/',
-    }
+    logs.push(`Git HTTPS 规则已就绪 (${gitConfigured}/${GIT_HTTPS_REWRITES.length})`)
+    const runInstall = (targetRegistry) => execSync(
+      `${npmBin} install -g ${pkg}@${ver} --force --registry ${targetRegistry} --verbose 2>&1`,
+      { timeout: 120000, windowsHide: true, env: gitEnv }
+    ).toString()
     try {
-      const out = execSync(`${npmBin} install -g ${pkg}@${ver} --registry https://registry.npmmirror.com 2>&1`, { timeout: 120000, windowsHide: true, env: { ...process.env, ...gitEnv } }).toString()
-      const action = ver === 'latest' ? '升级' : '安装'
-      return `${action}完成 (${pkg}@${ver})\n${out.slice(-200)}`
+      let out
+      try {
+        out = runInstall(registry)
+      } catch (e) {
+        if (registry !== 'https://registry.npmjs.org') {
+          logs.push('镜像源安装失败，自动切换到 npm 官方源重试...')
+          out = runInstall('https://registry.npmjs.org')
+        } else {
+          throw e
+        }
+      }
+      if (needUninstallOld) {
+        try { execSync(`${npmBin} uninstall -g ${oldPkg} 2>&1`, { timeout: 60000, windowsHide: true }) } catch {}
+      }
+      logs.push(`安装完成 (${pkg}@${ver})`)
+      return `${logs.join('\n')}\n${out.slice(-400)}`
     } catch (e) {
       throw new Error('安装失败: ' + (e.stderr?.toString() || e.message).slice(-300))
     }
@@ -2771,9 +2964,10 @@ const handlers = {
   init_openclaw_config() {
     if (fs.existsSync(CONFIG_PATH)) return { created: false, message: '配置文件已存在' }
     if (!fs.existsSync(OPENCLAW_DIR)) fs.mkdirSync(OPENCLAW_DIR, { recursive: true })
+    const lastTouchedVersion = recommendedVersionFor('chinese') || '2026.1.1'
     const defaultConfig = {
       "$schema": "https://openclaw.ai/schema/config.json",
-      meta: { lastTouchedVersion: "2026.1.1" },
+      meta: { lastTouchedVersion },
       models: { providers: {} },
       gateway: {
         mode: "local",
@@ -3217,6 +3411,13 @@ const handlers = {
     fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify(config, null, 2))
     invalidateConfigCache()
     return true
+  },
+
+  test_proxy({ url }) {
+    const cfg = readPanelConfig()
+    const proxyUrl = cfg?.networkProxy?.url
+    if (!proxyUrl) throw new Error('未配置代理地址')
+    return { ok: true, status: 200, elapsed_ms: 0, proxy: proxyUrl, target: url || 'N/A (Web模式不支持代理测试)' }
   },
 
   // === Agent 管理（Web 模式） ===

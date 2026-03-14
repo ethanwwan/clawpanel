@@ -7,6 +7,7 @@
 const BOT_ICON = '<svg viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect x="5" y="8" width="14" height="12" rx="2"/><path d="M9 13h0"/><path d="M15 13h0"/><path d="M10 17h4"/></svg>'
 
 const POS_KEY = 'clawpanel-fab-pos'
+const ENABLE_AI_FAB = true
 
 // ── 页面上下文收集器注册表 ──
 const _contextProviders = {}
@@ -25,8 +26,14 @@ let _fab = null
 
 /** 初始化 FAB */
 export function initAIFab() {
+  if (!ENABLE_AI_FAB) {
+    document.querySelectorAll('.ai-fab').forEach(el => el.remove())
+    _fab = null
+    return null
+  }
   if (_fab) return _fab
   _fab = createFab()
+  showDragHintOnce(_fab.el)
   return _fab
 }
 
@@ -42,8 +49,13 @@ export function openAIDrawerWithError(errorCtx) {
   // 不自动导航 — FAB 按钮会出现红点提示，用户主动点击时跳转
   // 如果用户已在助手页，也会实时检测到
   if (getCurrentRoute() !== '/assistant') {
-    // 让 FAB 显示红点
-    if (_fab?.el) _fab.el.classList.add('has-error')
+    if (_fab?.el) {
+      _fab.el.classList.add('has-error')
+    } else {
+      import('./toast.js')
+        .then(({ toast }) => toast('已保存诊断上下文，可从侧边栏进入「晴辰助手」继续处理', 'info'))
+        .catch(() => {})
+    }
   } else {
     // 已在助手页 → 直接触发 banner 显示
     window.dispatchEvent(new CustomEvent('assistant-error-injected'))
@@ -172,10 +184,11 @@ function createFab() {
     window.location.hash = '#/assistant'
   }
 
-  // ── 路由变化时隐藏/显示 ──
+  // ── 路由变化时隐藏/显示（助手页和实时聊天页隐藏） ──
+  const HIDE_ROUTES = ['/assistant', '/chat']
   function updateVisibility() {
     const route = getCurrentRoute()
-    fab.style.display = route === '/assistant' ? 'none' : 'flex'
+    fab.style.display = HIDE_ROUTES.includes(route) ? 'none' : 'flex'
   }
 
   window.addEventListener('hashchange', updateVisibility)
@@ -208,4 +221,15 @@ function restorePosition(fab) {
       fab.style.bottom = 'auto'
     }
   } catch {}
+}
+
+const HINT_KEY = 'clawpanel-fab-hint-shown'
+function showDragHintOnce(el) {
+  if (!el || localStorage.getItem(HINT_KEY)) return
+  const tip = document.createElement('div')
+  tip.className = 'ai-fab-hint'
+  tip.textContent = '长按可拖动'
+  el.appendChild(tip)
+  localStorage.setItem(HINT_KEY, '1')
+  setTimeout(() => tip.remove(), 4000)
 }

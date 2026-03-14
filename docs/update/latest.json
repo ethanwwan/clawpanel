@@ -1,9 +1,9 @@
 {
-  "version": "0.8.6",
-  "minAppVersion": "0.8.6",
-  "hash": "sha256:a6c28d0607c4226ccffa8199c4aa21f1bd7075ed7b85e24be1fb31f105ae983d",
-  "url": "https://github.com/qingchencloud/clawpanel/releases/download/v0.8.6/web-0.8.6.zip",
-  "size": 1967473,
-  "changelog": "",
-  "releasedAt": "2026-03-13T09:29:07Z"
+  "version": "0.9.1",
+  "minAppVersion": "0.9.0",
+  "hash": "",
+  "url": "https://github.com/qingchencloud/clawpanel/releases/download/v0.9.1/web-0.9.1.zip",
+  "size": 0,
+  "changelog": "新增面板设置页、网络代理、后台安装、模型服务商扩展等",
+  "releasedAt": "2026-03-14T18:00:00Z"
 }

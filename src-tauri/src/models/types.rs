@@ -14,6 +14,11 @@ pub struct ServiceStatus {
 pub struct VersionInfo {
     pub current: Option<String>,
     pub latest: Option<String>,
+    pub recommended: Option<String>,
     pub update_available: bool,
+    pub latest_update_available: bool,
+    pub is_recommended: bool,
+    pub ahead_of_recommended: bool,
+    pub panel_version: String,
     pub source: String,
 }

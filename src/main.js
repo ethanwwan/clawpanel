@@ -4,7 +4,7 @@
 import { registerRoute, initRouter, navigate, setDefaultRoute } from './router.js'
 import { renderSidebar, openMobileSidebar } from './components/sidebar.js'
 import { initTheme } from './lib/theme.js'
-import { detectOpenclawStatus, isOpenclawReady, isGatewayRunning, onGatewayChange, startGatewayPoll, onGuardianGiveUp, resetAutoRestart, loadActiveInstance, getActiveInstance, onInstanceChange } from './lib/app-state.js'
+import { detectOpenclawStatus, isOpenclawReady, isUpgrading, isGatewayRunning, onGatewayChange, startGatewayPoll, onGuardianGiveUp, resetAutoRestart, loadActiveInstance, getActiveInstance, onInstanceChange } from './lib/app-state.js'
 import { wsClient } from './lib/ws-client.js'
 import { api, checkBackendHealth, isBackendOnline, onBackendStatusChange } from './lib/tauri-api.js'
 import { version as APP_VERSION } from '../package.json'
@@ -306,6 +306,7 @@ async function boot() {
   registerRoute('/cron', () => import('./pages/cron.js'))
   registerRoute('/usage', () => import('./pages/usage.js'))
   registerRoute('/communication', () => import('./pages/communication.js'))
+  registerRoute('/settings', () => import('./pages/settings.js'))
 
   renderSidebar(sidebar)
   initRouter(content)
@@ -406,6 +407,30 @@ async function boot() {
         await detectOpenclawStatus()
         if (isGatewayRunning()) autoConnectWebSocket()
       })
+    }
+
+    // 全局监听后台任务完成/失败事件，自动刷新安装状态和侧边栏
+    if (window.__TAURI_INTERNALS__) {
+      import('@tauri-apps/api/event').then(async ({ listen }) => {
+        const refreshAfterTask = async () => {
+          // 清除 API 缓存，确保拿到最新状态
+          const { invalidate } = await import('./lib/tauri-api.js')
+          invalidate('check_installation', 'get_services_status', 'get_version_info')
+          await detectOpenclawStatus()
+          renderSidebar(sidebar)
+          // 如果安装完成后变为就绪，跳转到仪表盘
+          if (isOpenclawReady() && window.location.hash === '#/setup') {
+            navigate('/dashboard')
+          }
+          // 如果卸载后变为未就绪，跳转到 setup
+          if (!isOpenclawReady() && !isUpgrading()) {
+            setDefaultRoute('/setup')
+            navigate('/setup')
+          }
+        }
+        await listen('upgrade-done', refreshAfterTask)
+        await listen('upgrade-error', refreshAfterTask)
+      }).catch(() => {})
     }
   })
 }
@@ -729,7 +754,7 @@ function startUpdateChecker() {
       } catch {}
       try {
         const ver = await api.getVersionInfo()
-        lines.push(`- 版本: ${ver?.current || '?'} → ${ver?.latest || '?'}`)
+        lines.push(`- 版本: 当前 ${ver?.current || '?'} / 推荐 ${ver?.recommended || '?'} / 最新 ${ver?.latest || '?'}${ver?.ahead_of_recommended ? ' / 当前版本高于推荐版' : ''}`)
       } catch {}
       return { detail: lines.join('\n') }
     })

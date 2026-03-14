@@ -30,10 +30,6 @@ export async function render() {
     </div>
     <div id="version-bar"><div class="stat-card loading-placeholder" style="height:80px;margin-bottom:var(--space-lg)"></div></div>
     <div id="services-list"><div class="stat-card loading-placeholder" style="height:64px"></div></div>
-    <div class="config-section" id="registry-section">
-      <div class="config-section-title">npm 源设置</div>
-      <div id="registry-bar"></div>
-    </div>
     <div class="config-section" id="config-editor-section" style="display:none">
       <div class="config-section-title">配置文件编辑</div>
       <div class="form-hint" style="margin-bottom:var(--space-sm)">直接编辑 <code>openclaw.json</code> 主配置文件。保存前会自动创建备份，修改后可能需要重启 Gateway 生效。</div>
@@ -55,12 +51,6 @@ export async function render() {
     </div>
   `
 
-  // Docker 模式下隐藏 npm 源设置
-  if (isInDocker()) {
-    const regSection = page.querySelector('#registry-section')
-    if (regSection) regSection.style.display = 'none'
-  }
-
   bindEvents(page)
   loadAll(page)
   return page
@@ -68,7 +58,6 @@ export async function render() {
 
 async function loadAll(page) {
   const tasks = [loadVersion(page), loadServices(page), loadBackups(page), loadConfigEditor(page)]
-  if (!isInDocker()) tasks.push(loadRegistry(page))
   await Promise.all(tasks)
 }
 
@@ -76,18 +65,25 @@ async function loadAll(page) {
 
 // 后端检测到的当前安装源
 let detectedSource = 'chinese'
+let lastVersionInfo = null
 
 async function loadVersion(page) {
   const bar = page.querySelector('#version-bar')
   try {
     const info = await api.getVersionInfo()
+    lastVersionInfo = info
     detectedSource = info.source || 'chinese'
     const ver = info.current || '未知'
-    const hasUpdate = info.update_available
+    const hasRecommended = !!info.recommended
+    const aheadOfRecommended = !!info.current && hasRecommended && !!info.ahead_of_recommended
+    const driftFromRecommended = !!info.current && hasRecommended && !info.is_recommended && !aheadOfRecommended
     const isChinese = detectedSource === 'chinese'
     const sourceTag = isChinese ? '汉化优化版' : '官方原版'
     const switchLabel = isChinese ? '切换到官方版' : '切换到汉化版'
     const switchTarget = isChinese ? 'official' : 'chinese'
+    const policyNote = aheadOfRecommended
+      ? `检测到当前本地版本 ${ver} 高于面板推荐稳定版 ${info.recommended}，继续使用可能存在兼容或稳定性风险，建议尽快回退到推荐版。`
+      : '默认只建议当前面板已验证的推荐稳定版。如需尝试其它版本或最新特性，请到「关于」页手动切换版本并自行验证兼容性；若希望面板优先适配最新版，欢迎提交 issue。'
 
     if (isInDocker()) {
       bar.innerHTML = `
@@ -97,8 +93,8 @@ async function loadVersion(page) {
               <span class="stat-card-label">当前版本 · <span style="color:var(--accent)">Docker 部署</span></span>
             </div>
             <div class="stat-card-value">${ver}</div>
-            <div class="stat-card-meta">${hasUpdate ? '新版本: ' + info.latest + '（请拉取新镜像更新）' : '已是最新版本'}</div>
-            ${hasUpdate ? `<div style="margin-top:var(--space-sm)">
+            <div class="stat-card-meta">${info.latest_update_available ? '最新上游: ' + info.latest + '（请拉取新镜像更新）' : '已是当前镜像版本'}</div>
+            ${info.latest_update_available ? `<div style="margin-top:var(--space-sm)">
               <code style="font-size:var(--font-size-xs);background:var(--bg-tertiary);padding:4px 8px;border-radius:4px;user-select:all">docker pull ghcr.io/qingchencloud/openclaw:latest</code>
             </div>` : ''}
           </div>
@@ -112,10 +108,18 @@ async function loadVersion(page) {
               <span class="stat-card-label">当前版本 · <span style="color:var(--accent)">${sourceTag}</span></span>
             </div>
             <div class="stat-card-value">${ver}</div>
-            <div class="stat-card-meta">${hasUpdate ? '新版本: ' + info.latest : '已是最新版本'}</div>
+            <div class="stat-card-meta">
+              ${hasRecommended
+                ? (aheadOfRecommended ? `当前版本高于推荐稳定版: ${info.recommended}` : driftFromRecommended ? `推荐稳定版: ${info.recommended}` : `已对齐推荐稳定版: ${info.recommended}`)
+                : '未获取到推荐稳定版'}
+              ${info.latest_update_available && info.latest ? ` · 最新上游: ${info.latest}` : ''}
+            </div>
             <div style="display:flex;gap:var(--space-sm);margin-top:var(--space-sm);flex-wrap:wrap">
-              ${hasUpdate ? '<button class="btn btn-primary btn-sm" data-action="upgrade">升级到最新版</button>' : ''}
+              ${aheadOfRecommended ? '<button class="btn btn-primary btn-sm" data-action="upgrade">回退到推荐版</button>' : driftFromRecommended ? '<button class="btn btn-primary btn-sm" data-action="upgrade">切换到推荐版</button>' : ''}
               <button class="btn btn-secondary btn-sm" data-action="switch-source" data-source="${switchTarget}">${switchLabel}</button>
+            </div>
+            <div style="margin-top:8px;font-size:var(--font-size-xs);color:var(--text-tertiary);line-height:1.6">
+              ${policyNote}
             </div>
           </div>
         </div>
@@ -123,41 +127,6 @@ async function loadVersion(page) {
     }
   } catch (e) {
     bar.innerHTML = `<div class="stat-card" style="margin-bottom:var(--space-lg)"><div class="stat-card-label">版本信息加载失败</div></div>`
-  }
-}
-
-// ===== npm 源设置 =====
-
-const REGISTRIES = [
-  { label: '淘宝镜像 (推荐)', value: 'https://registry.npmmirror.com' },
-  { label: 'npm 官方源', value: 'https://registry.npmjs.org' },
-  { label: '华为云镜像', value: 'https://repo.huaweicloud.com/repository/npm/' },
-]
-
-async function loadRegistry(page) {
-  const bar = page.querySelector('#registry-bar')
-  try {
-    const current = await api.getNpmRegistry()
-    const isPreset = REGISTRIES.some(r => r.value === current)
-    bar.innerHTML = `
-      <div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap">
-        <select class="form-input" data-name="registry" style="max-width:320px">
-          ${REGISTRIES.map(r => `<option value="${r.value}" ${r.value === current ? 'selected' : ''}>${r.label}</option>`).join('')}
-          <option value="custom" ${!isPreset ? 'selected' : ''}>自定义</option>
-        </select>
-        <input class="form-input" data-name="custom-registry" placeholder="https://..." value="${isPreset ? '' : escapeHtml(current)}" style="max-width:320px;${isPreset ? 'display:none' : ''}">
-        <button class="btn btn-primary btn-sm" data-action="save-registry">保存</button>
-      </div>
-      <div class="form-hint" style="margin-top:var(--space-xs)">升级和版本检测使用此源下载 npm 包，国内用户推荐淘宝镜像</div>
-    `
-    // 切换预设/自定义
-    const select = bar.querySelector('[data-name="registry"]')
-    const customInput = bar.querySelector('[data-name="custom-registry"]')
-    select.onchange = () => {
-      customInput.style.display = select.value === 'custom' ? '' : 'none'
-    }
-  } catch (e) {
-    bar.innerHTML = `<div style="color:var(--error)">加载失败: ${escapeHtml(String(e))}</div>`
   }
 }
 
@@ -312,9 +281,6 @@ function bindEvents(page) {
           break
         case 'refresh-services':
           await loadServices(page)
-          break
-        case 'save-registry':
-          await handleSaveRegistry(btn, page)
           break
       }
     } catch (e) {
@@ -539,60 +505,86 @@ async function handleSaveConfig(page, restart) {
 
 // ===== 升级操作 =====
 
-async function doUpgradeWithModal(source, page) {
-  const modal = showUpgradeModal()
-  let unlistenLog, unlistenProgress
+async function doUpgradeWithModal(source, page, version = null) {
+  const modal = showUpgradeModal('升级 / 切换版本')
+  let unlistenLog, unlistenProgress, unlistenDone, unlistenError
   setUpgrading(true)
+
+  // 清理所有监听
+  const cleanup = () => {
+    setUpgrading(false)
+    unlistenLog?.()
+    unlistenProgress?.()
+    unlistenDone?.()
+    unlistenError?.()
+  }
+
   try {
-    // Tauri 环境下监听实时日志；Web 模式跳过
     if (window.__TAURI_INTERNALS__) {
-      try {
-        const { listen } = await import('@tauri-apps/api/event')
-        unlistenLog = await listen('upgrade-log', (e) => modal.appendLog(e.payload))
-        unlistenProgress = await listen('upgrade-progress', (e) => modal.setProgress(e.payload))
-      } catch { /* Web 模式无 Tauri event */ }
+      const { listen } = await import('@tauri-apps/api/event')
+      unlistenLog = await listen('upgrade-log', (e) => modal.appendLog(e.payload))
+      unlistenProgress = await listen('upgrade-progress', (e) => modal.setProgress(e.payload))
+
+      // 后台任务完成事件
+      unlistenDone = await listen('upgrade-done', (e) => {
+        cleanup()
+        modal.setDone(typeof e.payload === 'string' ? e.payload : '操作完成')
+        loadVersion(page)
+      })
+
+      // 后台任务失败事件
+      unlistenError = await listen('upgrade-error', (e) => {
+        cleanup()
+        const errStr = String(e.payload || '未知错误')
+        modal.appendLog(errStr)
+        const fullLog = modal.getLogText() + '\n' + errStr
+        const diagnosis = diagnoseInstallError(fullLog)
+        modal.setError(diagnosis.title)
+        if (diagnosis.hint) modal.appendLog('')
+        if (diagnosis.hint) modal.appendHtmlLog(`${statusIcon('info', 14)} ${diagnosis.hint}`)
+        if (diagnosis.command) modal.appendHtmlLog(`${icon('clipboard', 14)} ${diagnosis.command}`)
+        if (window.__openAIDrawerWithError) {
+          window.__openAIDrawerWithError({ title: diagnosis.title, error: fullLog, scene: '升级 OpenClaw', hint: diagnosis.hint })
+        }
+      })
+
+      // 发起后台任务（立即返回）
+      await api.upgradeOpenclaw(source, version)
+      modal.appendLog('后台任务已启动，请等待完成...')
     } else {
+      // Web 模式：仍然同步等待（dev-api 后端没有 spawn）
       modal.appendLog('Web 模式：升级过程日志不可用，请等待完成...')
+      const msg = await api.upgradeOpenclaw(source, version)
+      modal.setDone(typeof msg === 'string' ? msg : (msg?.message || '升级完成'))
+      await loadVersion(page)
+      cleanup()
     }
-    const msg = await api.upgradeOpenclaw(source)
-    modal.setDone(typeof msg === 'string' ? msg : (msg?.message || '升级完成'))
-    await loadVersion(page)
   } catch (e) {
+    cleanup()
     const errStr = String(e)
     modal.appendLog(errStr)
     const fullLog = modal.getLogText() + '\n' + errStr
     const diagnosis = diagnoseInstallError(fullLog)
     modal.setError(diagnosis.title)
-    if (diagnosis.hint) modal.appendLog('')
-    if (diagnosis.hint) modal.appendHtmlLog(`${statusIcon('info', 14)} ${diagnosis.hint}`)
-    if (diagnosis.command) modal.appendHtmlLog(`${icon('clipboard', 14)} ${diagnosis.command}`)
-    if (window.__openAIDrawerWithError) {
-      window.__openAIDrawerWithError({
-        title: diagnosis.title,
-        error: fullLog,
-        scene: '升级 OpenClaw',
-        hint: diagnosis.hint,
-      })
-    }
-  } finally {
-    setUpgrading(false)
-    unlistenLog?.()
-    unlistenProgress?.()
   }
 }
 
 async function handleUpgrade(btn, page) {
   const sourceLabel = detectedSource === 'official' ? '官方原版' : '汉化优化版'
-  const yes = await showConfirm(`确定要升级 OpenClaw 到最新${sourceLabel}吗？\n升级过程中 Gateway 会短暂中断。`)
+  const recommended = lastVersionInfo?.recommended
+  const yes = await showConfirm(`确定要将 OpenClaw 切换到当前面板推荐的稳定${sourceLabel}${recommended ? `（${recommended}）` : ''}吗？\n切换过程中 Gateway 会短暂中断。\n如果你想尝试最新版，请到「关于」页手动切换版本并自测兼容性。`)
   if (!yes) return
-  await doUpgradeWithModal(detectedSource, page)
+  await doUpgradeWithModal(detectedSource, page, recommended || null)
 }
 
 async function handleSwitchSource(target, page) {
   const targetLabel = target === 'official' ? '官方原版' : '汉化优化版'
-  const yes = await showConfirm(`确定要切换到${targetLabel}吗？\n这会安装对应的 npm 包，配置数据不受影响。`)
+  const recommended = target === 'official'
+    ? (lastVersionInfo?.source === 'official' ? lastVersionInfo?.recommended : null)
+    : (lastVersionInfo?.source === 'chinese' ? lastVersionInfo?.recommended : null)
+  const yes = await showConfirm(`确定要切换到${targetLabel}${recommended ? `（推荐稳定版 ${recommended}）` : '（将自动选择该来源的推荐稳定版）'}吗？\n这会安装对应的 npm 包，配置数据不受影响。\n如需尝试最新版，请到「关于」页手动切换版本。`)
   if (!yes) return
-  await doUpgradeWithModal(target, page)
+  await doUpgradeWithModal(target, page, null)
 }
 
 // ===== Gateway 安装/卸载 =====
@@ -625,14 +617,4 @@ async function handleUninstallGateway(btn, page) {
     btn.classList.remove('btn-loading')
     btn.textContent = '卸载'
   }
-}
-
-async function handleSaveRegistry(btn, page) {
-  const section = page.querySelector('#registry-section')
-  const select = section.querySelector('[data-name="registry"]')
-  const customInput = section.querySelector('[data-name="custom-registry"]')
-  const registry = select.value === 'custom' ? customInput.value.trim() : select.value
-  if (!registry) { toast('请输入源地址', 'error'); return }
-  await api.setNpmRegistry(registry)
-  toast('npm 源已保存', 'success')
 }

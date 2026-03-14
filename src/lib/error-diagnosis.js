@@ -4,6 +4,8 @@
  */
 
 const NPM_CMD = 'npm install -g @qingchencloud/openclaw-zh --registry https://registry.npmmirror.com'
+const GIT_HTTPS_CMD = 'git config --global url."https://github.com/".insteadOf ssh://git@github.com/ && git config --global --add url."https://github.com/".insteadOf ssh://git@github.com && git config --global --add url."https://github.com/".insteadOf ssh://git@://github.com/ && git config --global --add url."https://github.com/".insteadOf git@github.com: && git config --global --add url."https://github.com/".insteadOf git://github.com/ && git config --global --add url."https://github.com/".insteadOf git+ssh://git@github.com/'
+const GIT_HTTPS_ROOT_CMD = 'sudo git config --global url."https://github.com/".insteadOf ssh://git@github.com/ && sudo git config --global --add url."https://github.com/".insteadOf ssh://git@github.com && sudo git config --global --add url."https://github.com/".insteadOf ssh://git@://github.com/ && sudo git config --global --add url."https://github.com/".insteadOf git@github.com: && sudo git config --global --add url."https://github.com/".insteadOf git://github.com/ && sudo git config --global --add url."https://github.com/".insteadOf git+ssh://git@github.com/'
 
 /**
  * @param {string} errStr - npm 错误输出（可含流式日志）
@@ -11,6 +13,11 @@ const NPM_CMD = 'npm install -g @qingchencloud/openclaw-zh --registry https://re
  */
 export function diagnoseInstallError(errStr) {
   const s = errStr.toLowerCase()
+  const rootNpm = s.includes('/root/.npm/') || s.includes('/root/.config/') || s.includes('sudo npm')
+  const gitFixCommand = rootNpm ? GIT_HTTPS_ROOT_CMD : GIT_HTTPS_CMD
+  const gitFixHint = rootNpm
+    ? 'GitHub SSH 认证失败。检测到本次安装实际由 root/sudo 执行，请先为 root 用户配置 HTTPS 替代规则后重试：'
+    : 'GitHub SSH 认证失败。ClawPanel 已尝试自动配置 HTTPS 替代，但可能未生效。请在终端手动执行：'
 
   // ===== 1. Git 相关 =====
 
@@ -18,8 +25,8 @@ export function diagnoseInstallError(errStr) {
   if (s.includes('permission denied (publickey)') || s.includes('host key verification failed')) {
     return {
       title: '安装失败 — Git SSH 认证被拒绝',
-      hint: 'GitHub SSH 认证失败。ClawPanel 已尝试自动配置 HTTPS 替代，但可能未生效。请在终端手动执行：',
-      command: 'git config --global url."https://github.com/".insteadOf ssh://git@github.com/ && git config --global --add url."https://github.com/".insteadOf git@github.com: && git config --global --add url."https://github.com/".insteadOf git://github.com/ && git config --global --add url."https://github.com/".insteadOf git+ssh://git@github.com/',
+      hint: gitFixHint,
+      command: gitFixCommand,
     }
   }
 
@@ -28,14 +35,14 @@ export function diagnoseInstallError(errStr) {
     if (s.includes('permission denied') || s.includes('publickey') || s.includes('host key verification')) {
       return {
         title: '安装失败 — Git SSH 认证被拒绝',
-        hint: 'GitHub SSH 认证失败。ClawPanel 已尝试自动配置 HTTPS 替代，但可能未生效。请在终端手动执行后重试：',
-        command: 'git config --global url."https://github.com/".insteadOf ssh://git@github.com/ && git config --global --add url."https://github.com/".insteadOf git@github.com: && git config --global --add url."https://github.com/".insteadOf git://github.com/ && git config --global --add url."https://github.com/".insteadOf git+ssh://git@github.com/',
+        hint: rootNpm ? 'GitHub SSH 认证失败。检测到本次安装由 root/sudo 执行，请先为 root 用户配置 HTTPS 替代规则后重试：' : 'GitHub SSH 认证失败。ClawPanel 已尝试自动配置 HTTPS 替代，但可能未生效。请在终端手动执行后重试：',
+        command: gitFixCommand,
       }
     }
     return {
       title: '安装失败 — Git 拉取依赖错误',
-      hint: 'Git 操作失败（exit 128）。可能是网络问题或 SSH 认证失败。请先确认网络正常，然后在终端手动执行以下命令后重试：',
-      command: 'git config --global url."https://github.com/".insteadOf ssh://git@github.com/ && git config --global --add url."https://github.com/".insteadOf git@github.com: && git config --global --add url."https://github.com/".insteadOf git+ssh://git@github.com/',
+      hint: rootNpm ? 'Git 操作失败（exit 128）。检测到本次安装由 root/sudo 执行，请先确认网络正常，再为 root 用户执行以下 HTTPS 替代规则后重试：' : 'Git 操作失败（exit 128）。可能是网络问题或 SSH 认证失败。请先确认网络正常，然后在终端手动执行以下命令后重试：',
+      command: gitFixCommand,
     }
   }
 
@@ -56,6 +63,15 @@ export function diagnoseInstallError(errStr) {
       title: '安装失败 — 文件被占用或权限不足',
       hint: '常见原因：杀毒软件拦截、Gateway 进程未关闭、或终端缺少管理员权限。\n请先关闭 Gateway，再以管理员身份打开终端手动安装：',
       command: NPM_CMD,
+    }
+  }
+
+  // EEXIST（文件已存在，切换版本/源时常见）
+  if (s.includes('eexist') || s.includes('file already exists') || s.includes('file exists')) {
+    return {
+      title: '安装失败 — 文件冲突',
+      hint: '旧版本的 openclaw 命令文件仍然存在。ClawPanel 已尝试自动清理，如仍失败请手动处理后重试：',
+      command: 'npm install -g @qingchencloud/openclaw-zh --force --registry https://registry.npmmirror.com',
     }
   }
 

@@ -382,11 +382,11 @@ pub async fn assistant_web_search(
         urlencoding::encode(&query)
     );
 
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let client = super::build_http_client(
+        std::time::Duration::from_secs(10),
+        Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"),
+    )
+    .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
 
     let html = client
         .get(&url)
@@ -454,10 +454,7 @@ pub async fn assistant_fetch_url(url: String) -> Result<String, String> {
     }
 
     let jina_url = format!("https://r.jina.ai/{}", url);
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0")
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
+    let client = super::build_http_client(std::time::Duration::from_secs(15), Some("Mozilla/5.0"))
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
 
     let content = client

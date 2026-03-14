@@ -47,6 +47,7 @@ const NAV_ITEMS_FULL = [
   {
     section: '',
     items: [
+      { route: '/settings', label: '面板设置', icon: 'settings' },
       { route: '/chat-debug', label: '系统诊断', icon: 'debug' },
       { route: '/about', label: '关于', icon: 'about' },
     ]
@@ -64,6 +65,7 @@ const NAV_ITEMS_SETUP = [
   {
     section: '',
     items: [
+      { route: '/settings', label: '面板设置', icon: 'settings' },
       { route: '/chat-debug', label: '系统诊断', icon: 'debug' },
       { route: '/about', label: '关于', icon: 'about' },
     ]

@@ -1,7 +1,9 @@
 #[cfg(not(target_os = "macos"))]
 use crate::utils::openclaw_command;
 /// 配置读写命令
+use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -29,6 +31,136 @@ impl Drop for GuardianPause {
 
 /// 预设 npm 源列表
 const DEFAULT_REGISTRY: &str = "https://registry.npmmirror.com";
+const GIT_HTTPS_REWRITES: [&str; 6] = [
+    "ssh://git@github.com/",
+    "ssh://git@github.com",
+    "ssh://git@://github.com/",
+    "git@github.com:",
+    "git://github.com/",
+    "git+ssh://git@github.com/",
+];
+
+#[derive(Debug, Deserialize, Default)]
+struct VersionPolicySource {
+    recommended: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct VersionPolicyEntry {
+    #[serde(default)]
+    official: VersionPolicySource,
+    #[serde(default)]
+    chinese: VersionPolicySource,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct VersionPolicy {
+    #[serde(default)]
+    default: VersionPolicyEntry,
+    #[serde(default)]
+    panels: HashMap<String, VersionPolicyEntry>,
+}
+
+fn panel_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+fn parse_version(value: &str) -> Vec<u32> {
+    value
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|s| s.parse().ok())
+        .collect()
+}
+
+/// 提取基础版本号（去掉 -zh.x / -nightly.xxx 等后缀，只保留主版本数字部分）
+/// "2026.3.13-zh.1" → "2026.3.13", "2026.3.13" → "2026.3.13"
+fn base_version(v: &str) -> String {
+    // 在第一个 '-' 处截断
+    let base = v.split('-').next().unwrap_or(v);
+    base.to_string()
+}
+
+/// 判断 CLI 报告的版本是否与推荐版匹配（考虑汉化版 -zh.x 后缀差异）
+fn versions_match(cli_version: &str, recommended: &str) -> bool {
+    if cli_version == recommended {
+        return true;
+    }
+    // CLI 报告 "2026.3.13"，推荐版 "2026.3.13-zh.1" → 基础版本相同即视为匹配
+    base_version(cli_version) == base_version(recommended)
+}
+
+/// 判断推荐版是否真的比当前版本更新（忽略 -zh.x 后缀）
+fn recommended_is_newer(recommended: &str, current: &str) -> bool {
+    let r = parse_version(&base_version(recommended));
+    let c = parse_version(&base_version(current));
+    r > c
+}
+
+fn load_version_policy() -> VersionPolicy {
+    serde_json::from_str(include_str!("../../../openclaw-version-policy.json")).unwrap_or_default()
+}
+
+fn recommended_version_for(source: &str) -> Option<String> {
+    let policy = load_version_policy();
+    let panel_entry = policy.panels.get(panel_version());
+    match source {
+        "official" => panel_entry
+            .and_then(|entry| entry.official.recommended.clone())
+            .or(policy.default.official.recommended),
+        _ => panel_entry
+            .and_then(|entry| entry.chinese.recommended.clone())
+            .or(policy.default.chinese.recommended),
+    }
+}
+
+fn configure_git_https_rules() -> usize {
+    let mut unset = Command::new("git");
+    unset.args([
+        "config",
+        "--global",
+        "--unset-all",
+        "url.https://github.com/.insteadOf",
+    ]);
+    #[cfg(target_os = "windows")]
+    unset.creation_flags(0x08000000);
+    let _ = unset.output();
+
+    let mut success = 0;
+    for from in GIT_HTTPS_REWRITES {
+        let mut cmd = Command::new("git");
+        cmd.args([
+            "config",
+            "--global",
+            "--add",
+            "url.https://github.com/.insteadOf",
+            from,
+        ]);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000);
+        if cmd.output().map(|o| o.status.success()).unwrap_or(false) {
+            success += 1;
+        }
+    }
+    success
+}
+
+fn apply_git_install_env(cmd: &mut Command) {
+    crate::commands::apply_proxy_env(cmd);
+    cmd.env("GIT_TERMINAL_PROMPT", "0")
+        .env(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o IdentitiesOnly=yes",
+        )
+        .env("GIT_ALLOW_PROTOCOL", "https:http:file");
+    cmd.env("GIT_CONFIG_COUNT", GIT_HTTPS_REWRITES.len().to_string());
+    for (idx, from) in GIT_HTTPS_REWRITES.iter().enumerate() {
+        cmd.env(
+            format!("GIT_CONFIG_KEY_{idx}"),
+            "url.https://github.com/.insteadOf",
+        )
+        .env(format!("GIT_CONFIG_VALUE_{idx}"), from);
+    }
+}
 
 /// Linux: 检测是否以 root 身份运行（避免 unsafe libc 调用）
 #[cfg(target_os = "linux")]
@@ -60,6 +192,7 @@ fn npm_command() -> Command {
         let mut cmd = Command::new("cmd");
         cmd.args(["/c", "npm", "--registry", &registry]);
         cmd.env("PATH", super::enhanced_path());
+        crate::commands::apply_proxy_env(&mut cmd);
         cmd.creation_flags(CREATE_NO_WINDOW);
         cmd
     }
@@ -68,6 +201,7 @@ fn npm_command() -> Command {
         let mut cmd = Command::new("npm");
         cmd.args(["--registry", &registry]);
         cmd.env("PATH", super::enhanced_path());
+        crate::commands::apply_proxy_env(&mut cmd);
         cmd
     }
     #[cfg(target_os = "linux")]
@@ -76,7 +210,7 @@ fn npm_command() -> Command {
         let need_sudo = !nix_is_root();
         let mut cmd = if need_sudo {
             let mut c = Command::new("sudo");
-            c.args(["npm", "--registry", &registry]);
+            c.args(["-E", "npm", "--registry", &registry]);
             c
         } else {
             let mut c = Command::new("npm");
@@ -84,7 +218,50 @@ fn npm_command() -> Command {
             c
         };
         cmd.env("PATH", super::enhanced_path());
+        crate::commands::apply_proxy_env(&mut cmd);
         cmd
+    }
+}
+
+/// 安装/升级前的清理工作：停止 Gateway、清理 npm 全局 bin 下的 openclaw 残留文件
+/// 解决 Windows 上 EEXIST（文件已存在）和文件被占用的问题
+fn pre_install_cleanup() {
+    // 1. 停止 Gateway 进程，释放 openclaw 相关文件锁
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // 杀死所有 openclaw gateway 相关的 node 进程
+        let _ = Command::new("taskkill")
+            .args(["/f", "/im", "node.exe", "/fi", "WINDOWTITLE eq OpenClaw*"])
+            .creation_flags(0x08000000)
+            .output();
+        // 等文件锁释放
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let uid = get_uid().unwrap_or(501);
+        let _ = Command::new("launchctl")
+            .args(["bootout", &format!("gui/{uid}/ai.openclaw.gateway")])
+            .output();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = Command::new("pkill").args(["-f", "openclaw.*gateway"]).output();
+    }
+
+    // 2. 清理 npm 全局 bin 目录下的 openclaw 残留文件（Windows EEXIST 根因）
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let npm_bin = std::path::Path::new(&appdata).join("npm");
+            for name in &["openclaw", "openclaw.cmd", "openclaw.ps1"] {
+                let p = npm_bin.join(name);
+                if p.exists() {
+                    let _ = fs::remove_file(&p);
+                }
+            }
+        }
     }
 }
 
@@ -480,10 +657,7 @@ async fn get_local_version() -> Option<String> {
 
 /// 从 npm registry 获取最新版本号，超时 5 秒
 async fn get_latest_version_for(source: &str) -> Option<String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .ok()?;
+    let client = crate::commands::build_http_client(std::time::Duration::from_secs(2), None).ok()?;
     let pkg = npm_package_name(source)
         .replace('/', "%2F")
         .replace('@', "%40");
@@ -547,19 +721,34 @@ pub async fn get_version_info() -> Result<VersionInfo, String> {
     let current = get_local_version().await;
     let source = detect_installed_source();
     let latest = get_latest_version_for(&source).await;
-    let parse_ver = |v: &str| -> Vec<u32> {
-        v.split(|c: char| !c.is_ascii_digit())
-            .filter_map(|s| s.parse().ok())
-            .collect()
+    let recommended = recommended_version_for(&source);
+    let update_available = match (&current, &recommended) {
+        (Some(c), Some(r)) => recommended_is_newer(r, c),
+        (None, Some(_)) => true,
+        _ => false,
     };
-    let update_available = match (&current, &latest) {
-        (Some(c), Some(l)) => parse_ver(l) > parse_ver(c),
+    let latest_update_available = match (&current, &latest) {
+        (Some(c), Some(l)) => recommended_is_newer(l, c),
+        (None, Some(_)) => true,
+        _ => false,
+    };
+    let is_recommended = match (&current, &recommended) {
+        (Some(c), Some(r)) => versions_match(c, r),
+        _ => false,
+    };
+    let ahead_of_recommended = match (&current, &recommended) {
+        (Some(c), Some(r)) => recommended_is_newer(c, r),
         _ => false,
     };
     Ok(VersionInfo {
         current,
         latest,
+        recommended,
         update_available,
+        latest_update_available,
+        is_recommended,
+        ahead_of_recommended,
+        panel_version: panel_version().to_string(),
         source,
     })
 }
@@ -599,9 +788,7 @@ fn npm_package_name(source: &str) -> &'static str {
 /// 获取指定源的所有可用版本列表（从 npm registry 查询）
 #[tauri::command]
 pub async fn list_openclaw_versions(source: String) -> Result<Vec<String>, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
+    let client = crate::commands::build_http_client(std::time::Duration::from_secs(10), None)
         .map_err(|e| format!("HTTP 初始化失败: {e}"))?;
     let pkg = npm_package_name(&source).replace('/', "%2F");
     let registry = get_configured_registry();
@@ -616,32 +803,51 @@ pub async fn list_openclaw_versions(source: String) -> Result<Vec<String>, Strin
         .json()
         .await
         .map_err(|e| format!("解析响应失败: {e}"))?;
-    let versions = json
+    let mut versions = json
         .get("versions")
         .and_then(|v| v.as_object())
         .map(|obj| {
             let mut vers: Vec<String> = obj.keys().cloned().collect();
-            // 按版本号排序（新版本在前）
             vers.sort_by(|a, b| {
-                let pa: Vec<u32> = a
-                    .split(|c: char| !c.is_ascii_digit())
-                    .filter_map(|s| s.parse().ok())
-                    .collect();
-                let pb: Vec<u32> = b
-                    .split(|c: char| !c.is_ascii_digit())
-                    .filter_map(|s| s.parse().ok())
-                    .collect();
+                let pa = parse_version(a);
+                let pb = parse_version(b);
                 pb.cmp(&pa)
             });
             vers
         })
         .unwrap_or_default();
+    if let Some(recommended) = recommended_version_for(&source) {
+        if let Some(pos) = versions.iter().position(|v| v == &recommended) {
+            let version = versions.remove(pos);
+            versions.insert(0, version);
+        } else {
+            versions.insert(0, recommended);
+        }
+    }
     Ok(versions)
 }
 
-/// 执行 npm 全局安装/升级/降级 openclaw（流式推送日志）
+/// 执行 npm 全局安装/升级/降级 openclaw（后台执行，通过 event 推送进度）
+/// 立即返回，不阻塞前端。完成后 emit "upgrade-done" 或 "upgrade-error"。
 #[tauri::command]
 pub async fn upgrade_openclaw(
+    app: tauri::AppHandle,
+    source: String,
+    version: Option<String>,
+) -> Result<String, String> {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        use tauri::Emitter;
+        let result = upgrade_openclaw_inner(app2.clone(), source, version).await;
+        match result {
+            Ok(msg) => { let _ = app2.emit("upgrade-done", &msg); }
+            Err(err) => { let _ = app2.emit("upgrade-error", &err); }
+        }
+    });
+    Ok("任务已启动".into())
+}
+
+async fn upgrade_openclaw_inner(
     app: tauri::AppHandle,
     source: String,
     version: Option<String>,
@@ -653,7 +859,12 @@ pub async fn upgrade_openclaw(
 
     let current_source = detect_installed_source();
     let pkg_name = npm_package_name(&source);
-    let ver = version.as_deref().unwrap_or("latest");
+    let requested_version = version.clone();
+    let recommended_version = recommended_version_for(&source);
+    let ver = requested_version
+        .as_deref()
+        .or(recommended_version.as_deref())
+        .unwrap_or("latest");
     let pkg = format!("{}@{}", pkg_name, ver);
 
     // 切换源时需要卸载旧包，但为避免安装失败导致 CLI 丢失，
@@ -661,35 +872,35 @@ pub async fn upgrade_openclaw(
     let old_pkg = npm_package_name(&current_source);
     let need_uninstall_old = current_source != source;
 
-    // 自动配置 git 全面使用 HTTPS 替代 SSH/git 协议，避免用户没配 SSH Key 导致依赖安装失败
-    let _ = app.emit("upgrade-log", "配置 Git HTTPS 模式...");
-    // 先清除旧的 insteadOf 规则，再逐条添加（git config 不带 --add 会覆盖，只保留最后一条）
-    let _ = Command::new("git")
-        .args([
-            "config",
-            "--global",
-            "--unset-all",
-            "url.https://github.com/.insteadOf",
-        ])
-        .output();
-    for from in &[
-        "ssh://git@github.com/",
-        "git@github.com:",
-        "git://github.com/",
-        "git+ssh://git@github.com/",
-    ] {
-        let _ = Command::new("git")
-            .args([
-                "config",
-                "--global",
-                "--add",
-                "url.https://github.com/.insteadOf",
-                from,
-            ])
-            .output();
+    if requested_version.is_none() {
+        if let Some(recommended) = &recommended_version {
+            let _ = app.emit(
+                "upgrade-log",
+                format!(
+                    "ClawPanel {} 默认绑定 OpenClaw 稳定版: {}",
+                    panel_version(),
+                    recommended
+                ),
+            );
+        } else {
+            let _ = app.emit("upgrade-log", "未找到绑定稳定版，将回退到 latest");
+        }
     }
+    let configured_rules = configure_git_https_rules();
+    let _ = app.emit(
+        "upgrade-log",
+        format!(
+            "Git HTTPS 规则已就绪 ({}/{})",
+            configured_rules,
+            GIT_HTTPS_REWRITES.len()
+        ),
+    );
 
-    let _ = app.emit("upgrade-log", format!("$ npm install -g {pkg}"));
+    // 安装前：停止 Gateway 并清理可能冲突的 bin 文件
+    let _ = app.emit("upgrade-log", "正在停止 Gateway 并清理旧文件...");
+    pre_install_cleanup();
+
+    let _ = app.emit("upgrade-log", format!("$ npm install -g {pkg} --force"));
     let _ = app.emit("upgrade-progress", 10);
 
     // 汉化版只支持官方源和淘宝源
@@ -708,24 +919,10 @@ pub async fn upgrade_openclaw(
         configured_registry.as_str()
     };
 
-    let mut child = npm_command()
-        .args(["install", "-g", &pkg, "--registry", registry, "--verbose"])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env(
-            "GIT_SSH_COMMAND",
-            "ssh -o BatchMode=yes -o StrictHostKeyChecking=no",
-        )
-        // Force HTTPS insteadOf via env vars — ensures npm-spawned git subprocesses also use HTTPS
-        // even if global git config didn't take effect (e.g. git not in PATH, or Windows permission issues)
-        .env("GIT_CONFIG_COUNT", "4")
-        .env("GIT_CONFIG_KEY_0", "url.https://github.com/.insteadOf")
-        .env("GIT_CONFIG_VALUE_0", "ssh://git@github.com/")
-        .env("GIT_CONFIG_KEY_1", "url.https://github.com/.insteadOf")
-        .env("GIT_CONFIG_VALUE_1", "git@github.com:")
-        .env("GIT_CONFIG_KEY_2", "url.https://github.com/.insteadOf")
-        .env("GIT_CONFIG_VALUE_2", "git://github.com/")
-        .env("GIT_CONFIG_KEY_3", "url.https://github.com/.insteadOf")
-        .env("GIT_CONFIG_VALUE_3", "git+ssh://git@github.com/")
+    let mut install_cmd = npm_command();
+    install_cmd.args(["install", "-g", &pkg, "--force", "--registry", registry, "--verbose"]);
+    apply_git_install_env(&mut install_cmd);
+    let mut child = install_cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -778,22 +975,10 @@ pub async fn upgrade_openclaw(
             let _ = app.emit("upgrade-log", "⚠️ 镜像源安装失败，自动切换到官方源重试...");
             let _ = app.emit("upgrade-progress", 15);
             let fallback = "https://registry.npmjs.org";
-            let mut child2 = npm_command()
-                .args(["install", "-g", &pkg, "--registry", fallback, "--verbose"])
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .env(
-                    "GIT_SSH_COMMAND",
-                    "ssh -o BatchMode=yes -o StrictHostKeyChecking=no",
-                )
-                .env("GIT_CONFIG_COUNT", "4")
-                .env("GIT_CONFIG_KEY_0", "url.https://github.com/.insteadOf")
-                .env("GIT_CONFIG_VALUE_0", "ssh://git@github.com/")
-                .env("GIT_CONFIG_KEY_1", "url.https://github.com/.insteadOf")
-                .env("GIT_CONFIG_VALUE_1", "git@github.com:")
-                .env("GIT_CONFIG_KEY_2", "url.https://github.com/.insteadOf")
-                .env("GIT_CONFIG_VALUE_2", "git://github.com/")
-                .env("GIT_CONFIG_KEY_3", "url.https://github.com/.insteadOf")
-                .env("GIT_CONFIG_VALUE_3", "git+ssh://git@github.com/")
+            let mut install_cmd2 = npm_command();
+            install_cmd2.args(["install", "-g", &pkg, "--force", "--registry", fallback, "--verbose"]);
+            apply_git_install_env(&mut install_cmd2);
+            let mut child2 = install_cmd2
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
@@ -872,6 +1057,11 @@ pub async fn upgrade_openclaw(
     // 切换源后重装 Gateway 服务
     if need_uninstall_old {
         let _ = app.emit("upgrade-log", "正在重装 Gateway 服务（更新启动路径）...");
+
+        // 刷新 PATH 缓存和 CLI 检测缓存，确保找到新安装的二进制
+        super::refresh_enhanced_path();
+        crate::commands::service::invalidate_cli_detection_cache();
+
         // 先停掉旧的
         #[cfg(target_os = "macos")]
         {
@@ -884,7 +1074,7 @@ pub async fn upgrade_openclaw(
         {
             let _ = openclaw_command().args(["gateway", "stop"]).output();
         }
-        // 重新安装
+        // 重新安装（刷新后的 PATH 会找到新二进制）
         use crate::utils::openclaw_command_async;
         let gw_out = openclaw_command_async()
             .args(["gateway", "install"])
@@ -904,15 +1094,31 @@ pub async fn upgrade_openclaw(
     }
 
     let new_ver = get_local_version().await.unwrap_or_else(|| "未知".into());
-    let action = if ver == "latest" { "升级" } else { "安装" };
-    let msg = format!("✅ {action}成功，当前版本: {new_ver}");
+    let msg = format!("✅ 安装完成，当前版本: {new_ver}");
     let _ = app.emit("upgrade-log", &msg);
     Ok(msg)
 }
 
-/// 卸载 OpenClaw（npm uninstall + 可选清理配置）
+/// 卸载 OpenClaw（后台执行，通过 event 推送进度）
+/// 立即返回，不阻塞前端。完成后 emit "upgrade-done" 或 "upgrade-error"。
 #[tauri::command]
 pub async fn uninstall_openclaw(
+    app: tauri::AppHandle,
+    clean_config: bool,
+) -> Result<String, String> {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        use tauri::Emitter;
+        let result = uninstall_openclaw_inner(app2.clone(), clean_config).await;
+        match result {
+            Ok(msg) => { let _ = app2.emit("upgrade-done", &msg); }
+            Err(err) => { let _ = app2.emit("upgrade-error", &err); }
+        }
+    });
+    Ok("任务已启动".into())
+}
+
+async fn uninstall_openclaw_inner(
     app: tauri::AppHandle,
     clean_config: bool,
 ) -> Result<String, String> {
@@ -1042,9 +1248,11 @@ pub fn init_openclaw_config() -> Result<Value, String> {
         std::fs::create_dir_all(&dir).map_err(|e| format!("创建目录失败: {e}"))?;
     }
 
+    let last_touched_version =
+        recommended_version_for("chinese").unwrap_or_else(|| "2026.1.1".to_string());
     let default_config = serde_json::json!({
         "$schema": "https://openclaw.ai/schema/config.json",
-        "meta": { "lastTouchedVersion": "2026.1.1" },
+        "meta": { "lastTouchedVersion": last_touched_version },
         "models": { "providers": {} },
         "gateway": {
             "mode": "local",
@@ -1230,6 +1438,7 @@ pub fn save_custom_node_path(node_dir: String) -> Result<(), String> {
     std::fs::write(&config_path, json).map_err(|e| format!("写入配置失败: {e}"))?;
     // 立即刷新 PATH 缓存，使新路径生效（无需重启应用）
     super::refresh_enhanced_path();
+    crate::commands::service::invalidate_cli_detection_cache();
     Ok(())
 }
 
@@ -1490,9 +1699,7 @@ pub async fn test_model(
     let api_type = normalize_model_api_type(api_type.as_deref().unwrap_or("openai-completions"));
     let base = normalize_base_url_for_api(&base_url, api_type);
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
+    let client = crate::commands::build_http_client_no_proxy(std::time::Duration::from_secs(30), None)
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
 
     let resp = match api_type {
@@ -1636,9 +1843,7 @@ pub async fn list_remote_models(
     let api_type = normalize_model_api_type(api_type.as_deref().unwrap_or("openai-completions"));
     let base = normalize_base_url_for_api(&base_url, api_type);
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
+    let client = crate::commands::build_http_client_no_proxy(std::time::Duration::from_secs(15), None)
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
 
     let resp = match api_type {
@@ -1840,11 +2045,9 @@ pub fn patch_model_vision() -> Result<bool, String> {
 /// 检查 ClawPanel 自身是否有新版本（GitHub → Gitee 自动降级）
 #[tauri::command]
 pub async fn check_panel_update() -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .user_agent("ClawPanel")
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let client =
+        crate::commands::build_http_client(std::time::Duration::from_secs(8), Some("ClawPanel"))
+            .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
 
     // 先尝试 GitHub，失败后降级 Gitee
     let sources = [
@@ -1929,6 +2132,39 @@ pub fn write_panel_config(config: Value) -> Result<(), String> {
     let path = dir.join("clawpanel.json");
     let json = serde_json::to_string_pretty(&config).map_err(|e| format!("序列化失败: {e}"))?;
     fs::write(&path, json).map_err(|e| format!("写入失败: {e}"))
+}
+
+/// 测试代理连通性：通过配置的代理访问指定 URL，返回状态码和耗时
+#[tauri::command]
+pub async fn test_proxy(url: Option<String>) -> Result<Value, String> {
+    let proxy_url = crate::commands::configured_proxy_url()
+        .ok_or("未配置代理地址，请先在面板设置中保存代理地址")?;
+
+    let target = url.unwrap_or_else(|| "https://registry.npmjs.org/-/ping".to_string());
+
+    let client = crate::commands::build_http_client(std::time::Duration::from_secs(10), Some("ClawPanel"))
+        .map_err(|e| format!("创建代理客户端失败: {e}"))?;
+
+    let start = std::time::Instant::now();
+    let resp = client
+        .get(&target)
+        .send()
+        .await
+        .map_err(|e| {
+            let elapsed = start.elapsed().as_millis();
+            format!("代理连接失败 ({elapsed}ms): {e}")
+        })?;
+
+    let elapsed = start.elapsed().as_millis();
+    let status = resp.status().as_u16();
+
+    Ok(json!({
+        "ok": status < 500,
+        "status": status,
+        "elapsed_ms": elapsed,
+        "proxy": proxy_url,
+        "target": target,
+    }))
 }
 
 #[tauri::command]
@@ -2126,23 +2362,12 @@ pub async fn auto_install_git(app: tauri::AppHandle) -> Result<String, String> {
 /// 配置 Git 使用 HTTPS 替代 SSH，解决国内用户 SSH 不通的问题
 #[tauri::command]
 pub fn configure_git_https() -> Result<String, String> {
-    let mut success = 0;
-    let configs = [
-        ("url.https://github.com/.insteadOf", "ssh://git@github.com/"),
-        ("url.https://github.com/.insteadOf", "git@github.com:"),
-        ("url.https://github.com/.insteadOf", "git://github.com/"),
-    ];
-    for (key, value) in &configs {
-        let mut cmd = Command::new("git");
-        cmd.args(["config", "--global", key, value]);
-        #[cfg(target_os = "windows")]
-        cmd.creation_flags(0x08000000);
-        if cmd.output().map(|o| o.status.success()).unwrap_or(false) {
-            success += 1;
-        }
-    }
+    let success = configure_git_https_rules();
     if success > 0 {
-        Ok(format!("已配置 Git 使用 HTTPS（{success} 条规则）"))
+        Ok(format!(
+            "已配置 Git 使用 HTTPS（{success}/{} 条规则）",
+            GIT_HTTPS_REWRITES.len()
+        ))
     } else {
         Err("Git 未安装或配置失败".to_string())
     }
@@ -2152,5 +2377,6 @@ pub fn configure_git_https() -> Result<String, String> {
 #[tauri::command]
 pub fn invalidate_path_cache() -> Result<(), String> {
     super::refresh_enhanced_path();
+    crate::commands::service::invalidate_cli_detection_cache();
     Ok(())
 }

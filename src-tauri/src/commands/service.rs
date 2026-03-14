@@ -459,20 +459,20 @@ mod platform {
             .open(log_dir.join("gateway.err.log"))
             .map_err(|e| format!("创建错误日志文件失败: {e}"))?;
 
-        Command::new("openclaw")
-            .arg("gateway")
+        let mut cmd = Command::new("openclaw");
+        cmd.arg("gateway")
             .env("PATH", &enhanced)
             .stdin(std::process::Stdio::null())
             .stdout(stdout_log)
-            .stderr(stderr_log)
-            .spawn()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    "OpenClaw CLI 未找到，请确认已安装并重启 ClawPanel。".to_string()
-                } else {
-                    format!("启动 Gateway 失败: {e}")
-                }
-            })?;
+            .stderr(stderr_log);
+        crate::commands::apply_proxy_env(&mut cmd);
+        cmd.spawn().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "OpenClaw CLI 未找到，请确认已安装并重启 ClawPanel。".to_string()
+            } else {
+                format!("启动 Gateway 失败: {e}")
+            }
+        })?;
 
         // 等 Gateway 初始化
         std::thread::sleep(std::time::Duration::from_secs(2));
@@ -601,9 +601,11 @@ mod platform {
 
 #[cfg(target_os = "windows")]
 mod platform {
+    use std::env;
     use std::fs::{self, OpenOptions};
     use std::io::Write;
     use std::os::windows::process::CommandExt;
+    use std::path::{Path, PathBuf};
     use std::process::Stdio;
     use std::sync::Mutex;
     use tokio::process::Command as TokioCommand;
@@ -635,17 +637,65 @@ mod platform {
         result
     }
 
+    pub fn invalidate_cli_cache() {
+        if let Ok(mut guard) = CLI_CACHE.lock() {
+            *guard = None;
+        }
+    }
+
+    fn candidate_cli_paths() -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+
+        if let Ok(appdata) = env::var("APPDATA") {
+            candidates.push(Path::new(&appdata).join("npm").join("openclaw.cmd"));
+        }
+        if let Ok(localappdata) = env::var("LOCALAPPDATA") {
+            candidates.push(
+                Path::new(&localappdata)
+                    .join("Programs")
+                    .join("nodejs")
+                    .join("node_modules")
+                    .join("@qingchencloud")
+                    .join("openclaw-zh")
+                    .join("bin")
+                    .join("openclaw.js"),
+            );
+        }
+
+        for segment in crate::commands::enhanced_path().split(';') {
+            let dir = segment.trim();
+            if dir.is_empty() {
+                continue;
+            }
+            let base = Path::new(dir);
+            candidates.push(base.join("openclaw.cmd"));
+            candidates.push(base.join("openclaw"));
+            candidates.push(base.join("node_modules").join("@qingchencloud").join("openclaw-zh").join("bin").join("openclaw.js"));
+        }
+
+        candidates
+    }
+
     fn check_cli_installed_inner() -> bool {
         // 方式1: 检查常见文件路径（零进程，最快）
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let cmd_path = std::path::Path::new(&appdata)
-                .join("npm")
-                .join("openclaw.cmd");
-            if cmd_path.exists() {
+        for path in candidate_cli_paths() {
+            if path.exists() {
                 return true;
             }
         }
-        // 方式2: 通过 PATH 查找（兼容 nvm、自定义 prefix 等）
+
+        // 方式2: 通过 where 查找（兼容 nvm、自定义 prefix 等）
+        let mut where_cmd = std::process::Command::new("where");
+        where_cmd.arg("openclaw");
+        where_cmd.env("PATH", crate::commands::enhanced_path());
+        where_cmd.creation_flags(CREATE_NO_WINDOW);
+        if let Ok(o) = where_cmd.output() {
+            if o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty() {
+                return true;
+            }
+        }
+
+        // 方式3: 直接执行版本命令兜底
         let mut cmd = std::process::Command::new("cmd");
         cmd.args(["/c", "openclaw", "--version"]);
         cmd.env("PATH", crate::commands::enhanced_path());
@@ -829,15 +879,15 @@ mod platform {
         let enhanced = crate::commands::enhanced_path();
         let (stdout_log, stderr_log) = create_gateway_log_files()?;
 
-        std::process::Command::new("cmd")
-            .args(["/c", "openclaw", "gateway"])
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/c", "openclaw", "gateway"])
             .env("PATH", &enhanced)
             .creation_flags(CREATE_NO_WINDOW)
             .stdin(Stdio::null())
             .stdout(stdout_log)
-            .stderr(stderr_log)
-            .spawn()
-            .map_err(|e| format!("启动 Gateway 失败: {e}"))?;
+            .stderr(stderr_log);
+        crate::commands::apply_proxy_env(&mut cmd);
+        cmd.spawn().map_err(|e| format!("启动 Gateway 失败: {e}"))?;
 
         for _ in 0..50 {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -1024,6 +1074,14 @@ mod platform {
         gateway_command("restart").await
     }
 }
+
+#[cfg(target_os = "windows")]
+pub fn invalidate_cli_detection_cache() {
+    platform::invalidate_cli_cache();
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn invalidate_cli_detection_cache() {}
 
 // ===== 跨平台公共接口 =====
 

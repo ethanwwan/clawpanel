@@ -154,3 +154,25 @@
 .ast-error-toggle:hover {
   color: var(--text-primary);
 }
+
+/* FAB 首次拖动提示 */
+.ai-fab-hint {
+  position: absolute;
+  top: -32px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: fab-hint-fade 4s ease forwards;
+}
+@keyframes fab-hint-fade {
+  0% { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  15% { opacity: 1; transform: translateX(-50%) translateY(0); }
+  75% { opacity: 1; }
+  100% { opacity: 0; }
+}

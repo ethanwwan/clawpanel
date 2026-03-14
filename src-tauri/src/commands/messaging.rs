@@ -482,9 +482,7 @@ pub async fn toggle_messaging_platform(
 #[tauri::command]
 pub async fn verify_bot_token(platform: String, form: Value) -> Result<Value, String> {
     let form_obj = form.as_object().ok_or("表单数据格式错误")?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
+    let client = super::build_http_client(std::time::Duration::from_secs(15), None)
         .map_err(|e| format!("HTTP 客户端初始化失败: {}", e))?;
 
     match platform.as_str() {

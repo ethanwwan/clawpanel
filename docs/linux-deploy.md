@@ -332,24 +332,31 @@ sudo systemctl restart clawpanel  # 或 pm2 restart clawpanel
 
 **方式一：在 ClawPanel 面板中操作**（推荐）
 
-打开「关于」页面 → 点击「检查更新」→ 按提示升级。面板会自动处理 sudo 权限和镜像源。
+打开「关于」页面 → 点击版本管理，优先切换到当前面板绑定的推荐稳定版。面板会自动处理 sudo 权限、镜像源与 Git HTTPS 兼容。
+
+> **版本策略说明**：ClawPanel 会按面板版本绑定一组 OpenClaw 推荐稳定版，避免老面板直接管理最新版带来的兼容性风险。如需尝试最新版，请在「关于」页手动切换版本，并自行验证兼容性。
 
 **方式二：命令行手动升级**
 
 ```bash
-# 非 root 用户需要 sudo
-sudo npm install -g @qingchencloud/openclaw-zh@latest --registry https://registry.npmmirror.com
+# 汉化优化版（示例：ClawPanel 0.9.0 推荐版）
+sudo npm install -g @qingchencloud/openclaw-zh@2026.3.7-zh.2 --registry https://registry.npmmirror.com
 
-# 淘宝源安装失败？换官方源重试（可能需要翻墙或代理）
-sudo npm install -g @qingchencloud/openclaw-zh@latest --registry https://registry.npmjs.org
+# 官方原版（示例：ClawPanel 0.9.0 推荐版）
+sudo npm install -g openclaw@2026.3.11 --registry https://registry.npmjs.org
+
+# 国内镜像失败时，再切 npm 官方源重试
+sudo npm install -g @qingchencloud/openclaw-zh@2026.3.7-zh.2 --registry https://registry.npmjs.org
 ```
 
-> **权限说明**：Linux 全局 npm 包安装需要 root 权限。ClawPanel v0.8.1+ 已自动检测非 root 用户并加 sudo。如仍遇权限问题，手动加 `sudo` 即可。
+> **维护说明**：如果你是 ClawPanel 维护者，后续只需要更新仓库根目录的 `openclaw-version-policy.json`，即可统一调整不同面板版本对应的推荐 OpenClaw 版本。程序版本号、热更新清单、桌面图标的维护方式见 `docs/version-maintenance.md`。
+
+> **权限说明**：Linux 全局 npm 包安装需要 root 权限。ClawPanel 现已自动检测非 root 用户并加 sudo，同时会自动补 GitHub HTTPS rewrite 规则；如仍遇权限问题，手动加 `sudo` 即可。
 
 ### 更新频率
 
 - **ClawPanel**：`git pull` 获取最新代码，无需重新安装依赖（除非 package.json 变了）
-- **OpenClaw**：通过 npm 全局升级，面板会自动检测新版本并提示
+- **OpenClaw**：优先通过面板切换到推荐稳定版；如需尝试其它版本，请在「关于」页手动切换
 - **前端热更新**：面板支持前端热更新（不需要 git pull），在「关于」页面点击「热更新」按钮即可
 
 ---
