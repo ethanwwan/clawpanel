@@ -1449,15 +1449,8 @@ async function openConfigDialog(pid, page, state, accountId) {
             if (progressText) progressText.textContent = `${pct}%`
           })
 
-          // 自动 pin 插件版本到用户的 OpenClaw 版本（仅 install 动作）
-          let actionVersion = null
-          if (actionId === 'install') {
-            try {
-              const vInfo = await api.getVersionInfo()
-              if (vInfo?.current) actionVersion = vInfo.current.split('-')[0]
-            } catch {}
-          }
-          const output = await api.runChannelAction(pid, actionId, actionVersion)
+          // runChannelAction 的版本由后端自动检测（微信/QQ 版本号独立于 OpenClaw）
+          const output = await api.runChannelAction(pid, actionId, null)
           _flushQr() // 命令结束后刷新残留 QR 缓冲
           if (progressBar) progressBar.style.width = '100%'
           if (progressText) progressText.textContent = '100%'

@@ -7,7 +7,7 @@ import { toast } from '../components/toast.js'
 import { showUpgradeModal, showConfirm } from '../components/modal.js'
 import { setUpgrading } from '../lib/app-state.js'
 import { icon, statusIcon } from '../lib/icons.js'
-import { t } from '../lib/i18n.js'
+import { t, getLang } from '../lib/i18n.js'
 
 export async function render() {
   const page = document.createElement('div')
@@ -639,6 +639,11 @@ function renderCompany(page) {
       <div style="font-size:var(--font-size-xs);color:var(--text-tertiary);line-height:1.6">
         ${t('about.companyDesc')}
       </div>
+      ${getLang() === 'zh-CN' ? `<div style="margin-top:8px;padding:10px 12px;border-radius:var(--radius-md);border:1px dashed var(--border-primary);background:var(--bg-secondary);font-size:var(--font-size-xs);color:var(--text-tertiary);display:flex;align-items:center;gap:8px">
+        <span style="opacity:0.6">☕</span>
+        <span>请作者喝杯咖啡 (BNB Chain)</span>
+        <code style="font-size:10px;background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;user-select:all;word-break:break-all">0xbdd7ebdf2b30d873e556799711021c6671ffe88f</code>
+      </div>` : ''}
     </div>
   `
 }
