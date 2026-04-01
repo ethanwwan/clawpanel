@@ -7,10 +7,19 @@ import { toast } from '../components/toast.js'
 import { showConfirm } from '../components/modal.js'
 import { CHANNEL_LABELS } from '../lib/channel-labels.js'
 import { t } from '../lib/i18n.js'
+import { navigate } from '../router.js'
 
 function esc(str) {
   if (!str) return ''
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+function openChannelsBindingPage(agentId) {
+  const params = new URLSearchParams()
+  params.set('tab', 'agents')
+  params.set('agent', agentId || 'main')
+  params.set('action', 'bind')
+  navigate(`/channels?${params.toString()}`)
 }
 
 export async function render() {
@@ -568,10 +577,6 @@ async function openFileEditor(container, state, name, isNew = false) {
 async function renderChannels(container, state) {
   const bindings = state.detail?.bindings || []
 
-  // 获取已配置的渠道
-  let platforms = []
-  try { platforms = await api.listConfiguredPlatforms() } catch {}
-
   container.innerHTML = `
     <div class="agent-channels-section">
       <div class="agent-section-header">
@@ -579,7 +584,7 @@ async function renderChannels(container, state) {
           <h3 class="agent-section-title">${t('agentDetail.channelsTitle')}</h3>
           <p class="agent-section-desc">${t('agentDetail.channelsDesc')}</p>
         </div>
-        <button class="btn btn-sm btn-primary" id="btn-add-binding">${t('agentDetail.addBinding')}</button>
+        <button class="btn btn-sm btn-primary" id="btn-add-binding">${t('agentDetail.manageChannels')}</button>
       </div>
       <div id="agent-bindings-list"></div>
     </div>
@@ -588,7 +593,7 @@ async function renderChannels(container, state) {
   renderBindingsList(container, state, bindings)
 
   container.querySelector('#btn-add-binding').addEventListener('click', () => {
-    showAddBindingDialog(container, state, platforms)
+    openChannelsBindingPage(state.agentId)
   })
 }
 
@@ -627,71 +632,11 @@ function renderBindingsList(container, state, bindings) {
     try {
       await api.deleteAgentBinding(state.agentId, channel, account, binding?.match || null)
       toast(t('agentDetail.bindingRemoved'), 'success')
-      // 刷新
       invalidate('get_agent_detail')
       state.detail = await api.getAgentDetail(state.agentId)
       renderBindingsList(container, state, state.detail.bindings || [])
     } catch (e) {
       toast(t('agentDetail.bindingFailed') + ': ' + e, 'error')
     }
-  })
-}
-
-function showAddBindingDialog(container, state, platforms) {
-  const overlay = document.createElement('div')
-  overlay.className = 'modal-overlay'
-
-  // 构建渠道选项：已配置的渠道 + 所有已知渠道
-  const channels = new Set()
-  for (const p of platforms) {
-    if (p.platform || p.id) channels.add(p.platform || p.id)
-  }
-  // 确保常用渠道在列表中
-  for (const key of Object.keys(CHANNEL_LABELS)) channels.add(key)
-
-  const channelOptions = [...channels].map(ch =>
-    `<option value="${esc(ch)}">${esc(CHANNEL_LABELS[ch] || ch)}</option>`
-  ).join('')
-
-  overlay.innerHTML = `
-    <div class="modal" style="max-width:400px">
-      <div class="modal-title">${t('agentDetail.addBinding')}</div>
-      <div class="form-group">
-        <label class="form-label">${t('agentDetail.selectChannel')}</label>
-        <select class="form-input" id="bind-channel">${channelOptions}</select>
-      </div>
-      <div class="form-group">
-        <label class="form-label">${t('agentDetail.accountOptional')}</label>
-        <input class="form-input" id="bind-account" placeholder="${t('agentDetail.accountOptionalPlaceholder')}">
-      </div>
-      <div class="modal-actions">
-        <button class="btn btn-secondary btn-sm" data-action="cancel">${t('common.cancel')}</button>
-        <button class="btn btn-primary btn-sm" data-action="confirm">${t('common.confirm')}</button>
-      </div>
-    </div>
-  `
-  document.body.appendChild(overlay)
-
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
-  overlay.querySelector('[data-action="cancel"]').onclick = () => overlay.remove()
-  overlay.querySelector('[data-action="confirm"]').onclick = async () => {
-    const channel = overlay.querySelector('#bind-channel').value
-    const account = overlay.querySelector('#bind-account').value.trim() || null
-    if (!channel) return
-    try {
-      await api.saveAgentBinding(state.agentId, channel, account)
-      toast(t('agentDetail.bindingAdded'), 'success')
-      overlay.remove()
-      invalidate('get_agent_detail')
-      state.detail = await api.getAgentDetail(state.agentId)
-      renderBindingsList(container, state, state.detail.bindings || [])
-    } catch (e) {
-      toast(t('agentDetail.bindingFailed') + ': ' + e, 'error')
-      overlay.remove()
-    }
-  }
-  overlay.querySelector('[data-action="confirm"]').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') overlay.querySelector('[data-action="confirm"]').click()
-    if (e.key === 'Escape') overlay.remove()
   })
 }

@@ -245,6 +245,26 @@ const PLATFORM_REGISTRY = {
   },
 }
 
+function parseChannelsRouteIntent() {
+  const params = new URLSearchParams(location.hash.split('?')[1] || '')
+  return {
+    tab: params.get('tab') || '',
+    action: params.get('action') || '',
+    agentId: params.get('agent') || '',
+  }
+}
+
+function activateChannelsPageTab(page, key = 'channels') {
+  const activeKey = key === 'agents' ? 'agents' : 'channels'
+  page.querySelectorAll('#channels-page-tabs .tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.chTab === activeKey)
+  })
+  const listEl = page.querySelector('#channels-panel-list')
+  const agentsEl = page.querySelector('#channels-panel-agents')
+  if (listEl) listEl.style.display = activeKey === 'channels' ? '' : 'none'
+  if (agentsEl) agentsEl.style.display = activeKey === 'agents' ? '' : 'none'
+}
+
 // ── 页面生命周期 ──
 
 export async function render() {
@@ -275,7 +295,14 @@ export async function render() {
 
   bindChannelTabs(page)
 
-  const state = { configured: [], bindings: [], agents: [] }
+  const state = {
+    configured: [],
+    bindings: [],
+    agents: [],
+    routeIntent: parseChannelsRouteIntent(),
+    routeIntentConsumed: false,
+    routeIntentHintShown: false,
+  }
   await loadPlatforms(page, state)
 
   return page
@@ -284,12 +311,7 @@ export async function render() {
 function bindChannelTabs(page) {
   page.querySelectorAll('#channels-page-tabs .tab').forEach(tab => {
     tab.addEventListener('click', () => {
-      const key = tab.dataset.chTab
-      page.querySelectorAll('#channels-page-tabs .tab').forEach(t => t.classList.toggle('active', t === tab))
-      const listEl = page.querySelector('#channels-panel-list')
-      const agentsEl = page.querySelector('#channels-panel-agents')
-      if (listEl) listEl.style.display = key === 'channels' ? '' : 'none'
-      if (agentsEl) agentsEl.style.display = key === 'agents' ? '' : 'none'
+      activateChannelsPageTab(page, tab.dataset.chTab)
     })
   })
 }
@@ -321,6 +343,40 @@ async function loadPlatforms(page, state) {
   renderConfigured(page, state)
   renderAvailable(page, state)
   renderAgentBindings(page, state)
+  applyRouteIntent(page, state)
+}
+
+function applyRouteIntent(page, state) {
+  const intent = state.routeIntent
+  if (!intent) return
+
+  const requestedTab = intent.action === 'bind'
+    ? 'agents'
+    : (intent.tab === 'agents' ? 'agents' : intent.tab === 'channels' ? 'channels' : '')
+
+  if (requestedTab) activateChannelsPageTab(page, requestedTab)
+
+  if (state.routeIntentConsumed) return
+
+  if (intent.action === 'bind' && intent.agentId) {
+    const enabledConfigured = (state.configured || []).filter(p => p.enabled !== false)
+    if (!enabledConfigured.length) {
+      activateChannelsPageTab(page, 'channels')
+      if (!state.routeIntentHintShown) {
+        state.routeIntentHintShown = true
+        toast(t('channels.enableChannelFirst'), 'info')
+      }
+      return
+    }
+
+    state.routeIntentConsumed = true
+    const targetCard = Array.from(page.querySelectorAll('.agent-binding-card')).find(card => card.dataset.agentId === intent.agentId)
+    targetCard?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+    setTimeout(() => openAddAgentBindingModal(intent.agentId, page, state), 0)
+    return
+  }
+
+  if (requestedTab) state.routeIntentConsumed = true
 }
 
 // ── 已配置平台渲染 ──
@@ -1037,6 +1093,102 @@ function openExternalUrl(href) {
   import('@tauri-apps/plugin-shell').then(({ open }) => open(href)).catch(() => window.open(href, '_blank'))
 }
 
+function getManualCommandSpecs(pid, reg) {
+  if (pid === 'weixin') {
+    return [
+      {
+        id: 'install',
+        title: t('channels.manualInstallCommand'),
+        hint: t('channels.manualInstallHint', { platform: reg.label }),
+        command: 'npx -y @tencent-weixin/openclaw-weixin-cli@latest install',
+      },
+      {
+        id: 'login',
+        title: t('channels.manualLoginCommand'),
+        hint: t('channels.manualLoginHint'),
+        command: 'openclaw channels login --channel openclaw-weixin',
+      },
+    ]
+  }
+
+  if (!['qqbot', 'feishu', 'dingtalk'].includes(pid) || !reg.pluginRequired) {
+    return []
+  }
+
+  return [{
+    id: 'install',
+    title: t('channels.manualInstallCommand'),
+    hint: t('channels.manualInstallHint', { platform: reg.label }),
+    command: `openclaw plugins install ${reg.pluginRequired}`,
+  }]
+}
+
+function buildManualCommandPanel(commandSpecs) {
+  if (!commandSpecs.length) return ''
+
+  return `
+    <div style="margin-top:var(--space-md);padding:12px 14px;background:var(--bg-tertiary);border-radius:var(--radius-md)">
+      <div style="font-weight:600;font-size:var(--font-size-sm);margin-bottom:6px">${t('channels.manualCommands')}</div>
+      <div style="font-size:var(--font-size-xs);color:var(--text-secondary);line-height:1.7;margin-bottom:10px">${t('channels.manualCommandsHint')}</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        ${commandSpecs.map(spec => `
+          <div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:var(--radius-md);padding:10px 12px">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+              <div style="min-width:0;flex:1">
+                <div style="font-weight:600;font-size:var(--font-size-sm)">${spec.title}</div>
+                <div style="font-size:var(--font-size-xs);color:var(--text-secondary);line-height:1.6;margin-top:4px">${spec.hint}</div>
+              </div>
+              <button type="button" class="btn btn-xs btn-secondary" data-manual-copy="${escapeAttr(spec.id)}">${t('common.copy')}</button>
+            </div>
+            <pre style="margin:8px 0 0;font-family:var(--font-mono);font-size:11px;white-space:pre-wrap;word-break:break-all;color:var(--text-primary)">${escapeAttr(spec.command)}</pre>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  const ok = document.execCommand('copy')
+  textarea.remove()
+  if (!ok) throw new Error('copy failed')
+}
+
+function bindManualCommandCopy(root, commandSpecs) {
+  if (!root || !commandSpecs.length) return
+
+  const commandMap = new Map(commandSpecs.map(spec => [spec.id, spec.command]))
+  root.querySelectorAll('[data-manual-copy]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const command = commandMap.get(btn.dataset.manualCopy)
+      if (!command) return
+      const prev = btn.textContent
+      try {
+        await copyTextToClipboard(command)
+        btn.textContent = t('common.copied')
+        toast(t('common.copied'), 'success')
+        setTimeout(() => {
+          btn.textContent = prev
+        }, 1200)
+      } catch (e) {
+        toast(t('channels.copyCommandFailed') + ': ' + e, 'error')
+      }
+    })
+  })
+}
+
 /** QQ：展示后端完整诊断（凭证 + Gateway + 插件 + chatCompletions）；可选一键修复插件 */
 function showQqDiagnoseModal(result, options = {}) {
   const accountId = options.accountId != null ? options.accountId : null
@@ -1288,6 +1440,9 @@ async function openConfigDialog(pid, page, state, accountId) {
         ${t('channels.detectingPlugin')}
       </div>` : ''
 
+    const manualCommandSpecs = getManualCommandSpecs(pid, reg)
+    const manualCommandHtml = buildManualCommandPanel(manualCommandSpecs)
+
     const actionOnlyBtns = reg.actions?.length ? `
       <div style="padding:12px 14px;background:var(--bg-tertiary);border-radius:var(--radius-md)">
         <div style="font-weight:600;font-size:var(--font-size-sm);margin-bottom:8px">${t('channels.operations')}</div>
@@ -1300,12 +1455,13 @@ async function openConfigDialog(pid, page, state, accountId) {
 
     const modal = showContentModal({
       title: `${reg.label} ${t('channels.setup')}`,
-      content: actionOnlyGuide + pluginStatusHtml + actionOnlyBtns,
+      content: actionOnlyGuide + pluginStatusHtml + manualCommandHtml + actionOnlyBtns,
       buttons: [
         { label: t('channels.close'), className: 'btn btn-secondary', id: 'btn-close' },
       ],
       width: 560,
     })
+    bindManualCommandCopy(modal, manualCommandSpecs)
     modal.querySelector('#btn-close')?.addEventListener('click', () => modal.close?.() || modal.remove?.())
     modal.addEventListener('click', (e) => {
       const a = e.target.closest('a[href]')
@@ -1620,6 +1776,9 @@ async function openConfigDialog(pid, page, state, accountId) {
     </details>
   ` : ''
 
+  const manualCommandSpecs = getManualCommandSpecs(pid, reg)
+  const manualCommandHtml = buildManualCommandPanel(manualCommandSpecs)
+
   const pairingHtml = reg.pairingChannel ? `
     <div style="margin-top:var(--space-md);padding:12px 14px;background:var(--bg-tertiary);border-radius:var(--radius-md)">
       <div style="font-weight:600;font-size:var(--font-size-sm);margin-bottom:6px">${t('channels.pairingApproval')}</div>
@@ -1654,6 +1813,7 @@ async function openConfigDialog(pid, page, state, accountId) {
       ${accountIdHtml}
       ${agentBindingHtml}
     </form>
+    ${manualCommandHtml}
     ${actionPanelHtml}
     ${pairingHtml}
     <div id="verify-result" style="margin-top:var(--space-sm)"></div>
@@ -1673,6 +1833,7 @@ async function openConfigDialog(pid, page, state, accountId) {
     ],
     width: 520,
   })
+  bindManualCommandCopy(modal, manualCommandSpecs)
 
   // 外部链接用系统浏览器打开
   modal.addEventListener('click', (e) => {

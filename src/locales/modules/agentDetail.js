@@ -49,6 +49,7 @@ export default {
   channelsTitle: _('渠道绑定', 'Channel Bindings'),
   channelsDesc: _('管理此 Agent 绑定的消息渠道', 'Manage message channels bound to this Agent.'),
   addBinding: _('+ 添加绑定', '+ Add Binding'),
+  manageChannels: _('去消息渠道配置', 'Open Channels Page'),
   noBindings: _('此 Agent 尚未绑定任何渠道', 'This Agent has no bindings yet.'),
   removeBinding: _('解绑', 'Unbind'),
   bindingRemoved: _('已解除绑定', 'Binding removed'),

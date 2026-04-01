@@ -55,7 +55,7 @@ function renderDetectionHint(pathValue, sourceLabel = '') {
   if (!normalizedPath && !normalizedSource) return ''
   return `
     <div class="setup-inline-note" style="margin-top:8px;line-height:1.6">
-      ${normalizedPath ? `<div><span style="color:var(--text-secondary)">${t('setup.detectedPathLabel')}:</span> <code style="font-size:11px">${escapeHtml(normalizedPath)}</code></div>` : ''}
+      ${normalizedPath ? `<div><span style="color:var(--text-secondary)">${t('setup.detectedPathLabel')}:</span> <code class="setup-path-code" title="${escapeHtml(normalizedPath)}">${escapeHtml(normalizedPath)}</code></div>` : ''}
       ${normalizedSource ? `<div${normalizedPath ? ' style="margin-top:4px"' : ''}><span style="color:var(--text-secondary)">${t('setup.detectedFromLabel')}:</span> ${escapeHtml(normalizedSource)}</div>` : ''}
     </div>
   `
@@ -67,7 +67,7 @@ function renderStatusCard(title, ok, meta) {
       <div class="setup-status-icon">${ok ? '✓' : '✦'}</div>
       <div class="setup-status-body">
         <div class="setup-status-title">${title}</div>
-        <div class="setup-status-meta">${escapeHtml(meta)}</div>
+        <div class="setup-status-meta" title="${escapeHtml(meta)}">${escapeHtml(meta)}</div>
       </div>
     </div>
   `
@@ -85,6 +85,13 @@ export async function render() {
           <div class="setup-hero-copy">
             <h1 class="setup-hero-title">${t('setup.headerTitle')}</h1>
             <p class="setup-hero-desc">${t('setup.headerDesc')}</p>
+            <div class="setup-hero-site-row">
+              <a class="setup-hero-site-link" href="https://claw.qt.cool" target="_blank" rel="noopener noreferrer" title="https://claw.qt.cool">
+                ${icon('link', 14)}
+                <span class="setup-hero-site-label">${t('setup.officialWebsite')}</span>
+                <span class="setup-hero-site-value">claw.qt.cool</span>
+              </a>
+            </div>
           </div>
         </div>
         <div class="setup-hero-actions">
@@ -130,18 +137,6 @@ async function runDetect(page) {
     && clawRes.value[0]?.cli_installed !== false
   let config = configRes.status === 'fulfilled' ? configRes.value : { installed: false }
   const version = versionRes.status === 'fulfilled' ? versionRes.value : null
-
-  // CLI 已装但配置缺失 → 自动创建默认配置
-  if (cliOk && !config.installed) {
-    try {
-      const initResult = await api.initOpenclawConfig()
-      if (initResult?.created) {
-        config = await api.checkInstallation()
-      }
-    } catch (e) {
-      console.warn('[setup] 自动初始化配置失败:', e)
-    }
-  }
 
   // Git 已安装时，自动配置 HTTPS 替代 SSH（静默执行）
   if (git.installed) {
@@ -277,7 +272,7 @@ function renderSteps(page, { node, git, cliOk, config, version }) {
         ${stepIcon(config.installed)} ${t('setup.stepConfig')}
       </div>
       ${config.installed
-        ? `<p style="color:var(--success);font-size:var(--font-size-sm)">${t('setup.configAt', { path: config.path || '' })}</p>
+        ? `<p class="setup-path-text" style="color:var(--success);font-size:var(--font-size-sm)" title="${escapeHtml(config.path || '')}">${t('setup.configAt', { path: config.path || '' })}</p>
            ${renderDetectionHint(config.path)}`
         : `<p style="color:var(--text-secondary);font-size:var(--font-size-sm);margin-bottom:var(--space-sm)">
             ${t('setup.configMissing')}
@@ -694,7 +689,9 @@ function bindEvents(page, nodeOk, detectState) {
     btn.textContent = t('setup.initializing')
     try {
       const result = await api.initOpenclawConfig()
-      if (result?.created) {
+      if (result?.restored) {
+        toast(t('setup.configRestored'), 'success')
+      } else if (result?.created) {
         toast(t('setup.configCreated'), 'success')
       } else {
         toast(result?.message || t('setup.configExists'), 'info')
