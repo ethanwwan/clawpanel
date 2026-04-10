@@ -148,6 +148,19 @@ else
   else
     npm run tauri build
   fi
+
+  # macOS: 构建完成后执行 Ad-hoc 签名（解决"已损坏"问题）
+  if [[ "$OS" == "Darwin" ]]; then
+    step "应用 Ad-hoc 签名"
+    APP_PATH=$(find "src-tauri/target/release/bundle/macos" -name "*.app" -maxdepth 1 2>/dev/null | head -1)
+    if [ -n "$APP_PATH" ] && [ -d "$APP_PATH" ]; then
+      if codesign --force --deep --sign - "$APP_PATH" 2>/dev/null; then
+        ok "签名完成！可直接双击打开"
+      else
+        echo -e "  ${GRAY}签名可选，跳过${RESET}"
+      fi
+    fi
+  fi
 fi
 
 END_TIME=$(date +%s)

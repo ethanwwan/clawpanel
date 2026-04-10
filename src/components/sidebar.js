@@ -14,7 +14,7 @@ function NAV_ITEMS_FULL() { return [
     section: t('sidebar.sectionMonitor'),
     items: [
       { route: '/dashboard', label: t('sidebar.dashboard'), icon: 'dashboard' },
-      { route: '/assistant', label: t('sidebar.assistant'), icon: 'assistant' },
+      // { route: '/assistant', label: t('sidebar.assistant'), icon: 'assistant' },
       { route: '/chat', label: t('sidebar.chat'), icon: 'chat' },
       { route: '/services', label: t('sidebar.services'), icon: 'services' },
       { route: '/logs', label: t('sidebar.logs'), icon: 'logs' },
@@ -60,7 +60,7 @@ function NAV_ITEMS_SETUP() { return [
     section: '',
     items: [
       { route: '/setup', label: t('sidebar.setup'), icon: 'setup' },
-      { route: '/assistant', label: t('sidebar.assistant'), icon: 'assistant' },
+      // { route: '/assistant', label: t('sidebar.assistant'), icon: 'assistant' },
     ]
   },
   {

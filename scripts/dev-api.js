@@ -1000,6 +1000,7 @@ function scanLocalSkillsFallback(agentSkillsDir = null) {
   const skills = []
   const seen = new Set()
   const scannedRoots = []
+  const cliError = null  // 本地扫描模式，不涉及 CLI
 
   for (const root of roots) {
     if (!fs.existsSync(root.dir) || !fs.statSync(root.dir).isDirectory()) continue
@@ -5202,7 +5203,15 @@ const handlers = {
   // Gateway 安装/卸载
   install_gateway() {
     if (!resolveOpenclawCliPath()) throw new Error('openclaw CLI 未安装')
-    return execOpenclawSync(['gateway', 'install'], { windowsHide: true, cwd: homedir() }, 'Gateway 服务安装失败') || 'Gateway 服务已安装'
+    try {
+      return execOpenclawSync(['gateway', 'install'], { windowsHide: true, cwd: homedir() }, 'Gateway 服务安装失败') || 'Gateway 服务已安装'
+    } catch (error) {
+      const errorMsg = String(error.message || error)
+      if (errorMsg.includes('EPERM') && errorMsg.includes('LaunchAgents')) {
+        throw new Error('Gateway 服务安装失败：权限不足。请使用管理员权限运行：sudo npm run serve，或者手动运行：sudo openclaw gateway install')
+      }
+      throw error
+    }
   },
 
   async list_openclaw_versions({ source = 'chinese' } = {}) {

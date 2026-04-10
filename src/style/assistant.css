@@ -244,22 +244,69 @@
 .ast-msg-bubble-ai pre {
   background: var(--bg-tertiary);
   border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  overflow-x: auto;
-  font-size: 13px;
+  padding: 0;
   margin: 8px 0;
+  overflow: hidden;
+  position: relative;
+  font-size: 13px;
 }
 
 .ast-msg-bubble-ai code {
-  font-family: var(--font-mono);
-  font-size: 13px;
+  display: block;
+  padding: 36px 14px 14px 14px;
+  overflow-x: auto;
+  line-height: 1.5;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
 }
 
 .ast-msg-bubble-ai code:not(pre code) {
-  background: var(--bg-tertiary);
+  display: inline;
   padding: 1px 5px;
   border-radius: 3px;
+  background: var(--bg-tertiary);
 }
+
+.ast-msg-bubble-ai pre .code-lang {
+  position: absolute;
+  top: 6px;
+  left: 12px;
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ast-msg-bubble-ai pre .code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.ast-msg-bubble-ai pre:hover .code-copy-btn {
+  opacity: 1;
+}
+
+.ast-msg-bubble-ai pre .code-copy-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* 代码高亮 */
+.hl-keyword { color: #c678dd; }
+.hl-string { color: #98c379; }
+.hl-comment { color: #5c6370; font-style: italic; }
+.hl-number { color: #d19a66; }
+.hl-func { color: #61afef; }
+.hl-type { color: #e5c07b; }
+.hl-const { color: #d19a66; }
 
 .ast-msg-bubble-ai ul, .ast-msg-bubble-ai ol {
   margin: 4px 0;

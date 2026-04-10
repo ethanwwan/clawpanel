@@ -715,7 +715,9 @@ pub fn write_openclaw_config(config: Value) -> Result<(), String> {
 
     // 备份
     let bak = super::openclaw_dir().join("openclaw.json.bak");
-    let _ = fs::copy(&path, &bak);
+    if let Err(e) = fs::copy(&path, &bak) {
+        eprintln!("[config] 备份到 .bak 失败: {}", e);
+    }
 
     // 合并配置：现有配置 + 新配置
     // 策略：遍历现有配置，保留所有非 UI 字段

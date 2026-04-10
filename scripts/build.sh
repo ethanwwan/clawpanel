@@ -28,6 +28,21 @@ case "$MODE" in
   release)
     echo "📦 编译正式发布版本..."
     npm run tauri build
+
+    # macOS: 构建完成后执行 Ad-hoc 签名（解决"已损坏"问题）
+    if [[ "$(uname)" == "Darwin" ]]; then
+      APP_PATH=$(find "src-tauri/target/release/bundle/macos" -name "*.app" -maxdepth 1 2>/dev/null | head -1)
+      if [ -n "$APP_PATH" ] && [ -d "$APP_PATH" ]; then
+        echo ""
+        echo "🔏 应用 Ad-hoc 签名..."
+        if codesign --force --deep --sign - "$APP_PATH" 2>/dev/null; then
+          echo "✅ 签名完成！可直接双击打开，无需 xattr 命令"
+        else
+          echo "⚠️ 签名可选（可能需要手动 codesign），继续..."
+        fi
+      fi
+    fi
+
     echo "✅ Release 编译完成"
     echo "   产物目录: src-tauri/target/release/bundle/"
     ;;
