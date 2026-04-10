@@ -3627,7 +3627,7 @@ async fn upgrade_openclaw_inner(
     // 切换源时需要卸载旧包，但为避免安装失败导致 CLI 丢失，
     // 先安装新包，成功后再卸载旧包
     let old_pkg = npm_package_name(&current_source);
-    let need_uninstall_old = current_source != source;
+    let need_uninstall_old = current_source != source && old_pkg != pkg_name;
 
     if requested_version.is_none() {
         if let Some(recommended) = &recommended_version {

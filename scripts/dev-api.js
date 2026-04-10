@@ -5444,7 +5444,7 @@ const handlers = {
     const recommended = recommendedVersionFor(source)
     const ver = version || recommended || 'latest'
     const oldPkg = npmPackageName(currentSource)
-    const needUninstallOld = currentSource !== source
+    const needUninstallOld = currentSource !== source && oldPkg !== pkg
     const npmBin = isWindows ? 'npm.cmd' : 'npm'
     const registry = pickRegistryForPackage(pkg)
     const logs = []
