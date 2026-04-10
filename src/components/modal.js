@@ -214,6 +214,7 @@ export function showUpgradeModal(title) {
   let _onClose = null
   let _finished = false
   let _taskBar = null
+  let _progressLabels = null
 
   // 重新打开弹窗（从任务状态栏点击时）
   function reopenModal() {
@@ -275,13 +276,15 @@ export function showUpgradeModal(title) {
       logBox.scrollTop = logBox.scrollHeight
     },
     getLogText() { return _logLines.join('\n') },
+    setProgressLabels(labels) { _progressLabels = labels },
     setProgress(pct) {
       fill.style.width = pct + '%'
+      const labels = _progressLabels || {}
       let statusText
-      if (pct >= 100) statusText = t('common.completed')
-      else if (pct >= 75) statusText = t('common.installingProgress')
-      else if (pct >= 30) statusText = t('common.downloadingDependencies')
-      else statusText = t('common.preparing')
+      if (pct >= 100) statusText = labels.done || t('common.completed')
+      else if (pct >= 75) statusText = labels.installing || t('common.installingProgress')
+      else if (pct >= 30) statusText = labels.downloading || t('common.downloadingDependencies')
+      else statusText = labels.preparing || t('common.preparing')
       text.textContent = statusText
       updateTaskBar(statusText)
     },

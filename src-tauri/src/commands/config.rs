@@ -485,17 +485,49 @@ fn npm_command_elevated() -> Command {
 /// 安装/升级前的清理工作：停止 Gateway、清理 npm 全局 bin 下的 openclaw 残留文件
 /// 解决 Windows 上 EEXIST（文件已存在）和文件被占用的问题
 fn pre_install_cleanup() {
-    // 1. 停止 Gateway 进程，释放 openclaw 相关文件锁
+    // 1. 先通过 CLI 正常停止 Gateway
+    let _ = openclaw_command().args(["gateway", "stop"]).output();
+
+    // 2. 停止 Gateway 进程，释放 openclaw 相关文件锁
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        // 杀死所有 openclaw gateway 相关的 node 进程
-        let _ = Command::new("taskkill")
-            .args(["/f", "/im", "node.exe", "/fi", "WINDOWTITLE eq OpenClaw*"])
-            .creation_flags(0x08000000)
-            .output();
-        // 等文件锁释放
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        // 杀死所有运行 openclaw gateway 的 node.exe 进程（通过命令行匹配）
+        if let Ok(output) = Command::new("wmic")
+            .args(["process", "where", "CommandLine like '%openclaw%gateway%'", "get", "ProcessId", "/format:list"])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if let Some(pid_str) = line.strip_prefix("ProcessId=") {
+                    if let Ok(_pid) = pid_str.trim().parse::<u32>() {
+                        let _ = Command::new("taskkill").args(["/F", "/PID", pid_str.trim()]).output();
+                    }
+                }
+            }
+        }
+
+        // 同时杀死 standalone 目录下的 node.exe 进程
+        for sa_dir in all_standalone_dirs() {
+            if sa_dir.exists() {
+                let dir_str = sa_dir.to_string_lossy().to_lowercase();
+                if let Ok(output) = Command::new("wmic")
+                    .args(["process", "where", &format!("ExecutablePath like '%{}%'", dir_str.replace('\\', "\\\\")), "get", "ProcessId", "/format:list"])
+                    .output()
+                {
+                    let text = String::from_utf8_lossy(&output.stdout);
+                    for line in text.lines() {
+                        if let Some(pid_str) = line.strip_prefix("ProcessId=") {
+                            if let Ok(_pid) = pid_str.trim().parse::<u32>() {
+                                let _ = Command::new("taskkill").args(["/F", "/PID", pid_str.trim()]).output();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 等文件锁释放（Node.js 进程退出需要时间）
+        std::thread::sleep(std::time::Duration::from_secs(2));
     }
     #[cfg(target_os = "macos")]
     {
@@ -503,15 +535,17 @@ fn pre_install_cleanup() {
         let _ = Command::new("launchctl")
             .args(["bootout", &format!("gui/{uid}/ai.openclaw.gateway")])
             .output();
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
     #[cfg(target_os = "linux")]
     {
         let _ = Command::new("pkill")
             .args(["-f", "openclaw.*gateway"])
             .output();
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
 
-    // 2. 清理 npm 全局 bin 目录下的 openclaw 残留文件（Windows EEXIST 根因）
+    // 3. 清理 npm 全局 bin 目录下的 openclaw 残留文件（Windows EEXIST 根因）
     #[cfg(target_os = "windows")]
     {
         if let Some(npm_bin) = npm_global_bin_dir() {
@@ -3706,7 +3740,45 @@ async fn upgrade_openclaw_inner(
                     "upgrade-log",
                     format!("清理 standalone 残留: {}", sa_dir.display()),
                 );
-                let _ = std::fs::remove_dir_all(&sa_dir);
+
+                // Windows: 终止占用该目录的 node.exe 进程
+                #[cfg(target_os = "windows")]
+                {
+                    let dir_str = sa_dir.to_string_lossy().to_lowercase();
+                    if let Ok(output) = Command::new("wmic")
+                        .args(["process", "where", &format!("ExecutablePath like '%{}%'", dir_str.replace('\\', "\\\\")), "get", "ProcessId", "/format:list"])
+                        .output()
+                    {
+                        let text = String::from_utf8_lossy(&output.stdout);
+                        for line in text.lines() {
+                            if let Some(pid_str) = line.strip_prefix("ProcessId=") {
+                                if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                                    let _ = app.emit("upgrade-log", format!("终止占用进程 PID {pid}..."));
+                                    let _ = Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).output();
+                                }
+                            }
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+
+                match std::fs::remove_dir_all(&sa_dir) {
+                    Ok(()) => {
+                        let _ = app.emit("upgrade-log", "standalone 残留已清理 ✓");
+                    }
+                    Err(_) => {
+                        let _ = app.emit("upgrade-log", "文件被占用，等待后重试...");
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        if let Err(e) = std::fs::remove_dir_all(&sa_dir) {
+                            let _ = app.emit(
+                                "upgrade-log",
+                                format!("⚠️ 清理 standalone 残留失败: {e}（可手动删除 {}）", sa_dir.display()),
+                            );
+                        } else {
+                            let _ = app.emit("upgrade-log", "standalone 残留已清理（重试成功）✓");
+                        }
+                    }
+                }
             }
         }
     }
@@ -3731,6 +3803,8 @@ async fn upgrade_openclaw_inner(
         {
             let _ = openclaw_command().args(["gateway", "stop"]).output();
         }
+        // 等待旧 Gateway 进程退出
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         // 重新安装（刷新后的 PATH 会找到新二进制）
         use crate::utils::openclaw_command_async;
         let gw_out = openclaw_command_async()
@@ -3813,6 +3887,10 @@ async fn uninstall_openclaw_inner(
         let _ = openclaw_command().args(["gateway", "uninstall"]).output();
     }
 
+    // 等待进程完全退出（Gateway stop 是异步的，需要等文件锁释放）
+    let _ = app.emit("upgrade-log", "等待进程退出...");
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
     // 3. 清理 standalone 安装（所有可能的位置）
     for sa_dir in &all_standalone_dirs() {
         if sa_dir.exists() {
@@ -3820,13 +3898,47 @@ async fn uninstall_openclaw_inner(
                 "upgrade-log",
                 format!("清理 standalone 安装: {}", sa_dir.display()),
             );
-            if let Err(e) = std::fs::remove_dir_all(sa_dir) {
-                let _ = app.emit(
-                    "upgrade-log",
-                    format!("⚠️ 清理 standalone 失败: {e}（可能需要管理员权限）"),
-                );
-            } else {
-                let _ = app.emit("upgrade-log", "standalone 安装已清理 ✓");
+
+            // Windows: 先尝试终止占用该目录的 node.exe 进程
+            #[cfg(target_os = "windows")]
+            {
+                let dir_str = sa_dir.to_string_lossy().to_lowercase();
+                if let Ok(output) = Command::new("wmic")
+                    .args(["process", "where", &format!("ExecutablePath like '%{}%'", dir_str.replace('\\', "\\\\")), "get", "ProcessId", "/format:list"])
+                    .output()
+                {
+                    let text = String::from_utf8_lossy(&output.stdout);
+                    for line in text.lines() {
+                        if let Some(pid_str) = line.strip_prefix("ProcessId=") {
+                            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                                let _ = app.emit("upgrade-log", format!("终止占用进程 PID {pid}..."));
+                                let _ = Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).output();
+                            }
+                        }
+                    }
+                }
+                // 短暂等待进程退出
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+
+            // 尝试删除，失败则重试一次
+            match std::fs::remove_dir_all(sa_dir) {
+                Ok(()) => {
+                    let _ = app.emit("upgrade-log", "standalone 安装已清理 ✓");
+                }
+                Err(_) => {
+                    // 重试：等待后再删一次
+                    let _ = app.emit("upgrade-log", "文件被占用，等待后重试...");
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    if let Err(e) = std::fs::remove_dir_all(sa_dir) {
+                        let _ = app.emit(
+                            "upgrade-log",
+                            format!("⚠️ 清理 standalone 失败: {e}（可手动删除 {}）", sa_dir.display()),
+                        );
+                    } else {
+                        let _ = app.emit("upgrade-log", "standalone 安装已清理（重试成功）✓");
+                    }
+                }
             }
         }
     }

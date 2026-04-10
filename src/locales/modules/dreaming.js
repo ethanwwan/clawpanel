@@ -68,4 +68,5 @@ export default {
   configUnavailable: _('无法获取在线配置快照，请稍后重试', 'Unable to load live config snapshot, please retry'),
   actionRunning: _('处理中...', 'Working...'),
   pluginUnsupported: _('当前记忆插件可能不支持 Dreaming 配置', 'The current memory plugin may not support Dreaming config'),
+  rpcUnsupported: _('当前 Gateway 版本不支持部分 Dreaming 操作，请升级到 OpenClaw 2026.4.9+', 'Current Gateway version does not support some Dreaming operations, please upgrade to OpenClaw 2026.4.9+'),
 }
