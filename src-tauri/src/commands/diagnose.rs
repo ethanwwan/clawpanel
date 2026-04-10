@@ -59,9 +59,19 @@ fn collect_env() -> DiagnoseEnv {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
             let auth = val.get("gateway").and_then(|g| g.get("auth"));
             if let Some(auth) = auth {
-                if auth.get("token").and_then(|t| t.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+                if auth
+                    .get("token")
+                    .and_then(|t| t.as_str())
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false)
+                {
                     "token".to_string()
-                } else if auth.get("password").and_then(|p| p.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+                } else if auth
+                    .get("password")
+                    .and_then(|p| p.as_str())
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false)
+                {
                     "password".to_string()
                 } else {
                     "none".to_string()
@@ -88,7 +98,11 @@ fn collect_env() -> DiagnoseEnv {
     let err_log_path = openclaw_dir.join("logs").join("gateway.err.log");
     let err_log_excerpt = if let Ok(bytes) = std::fs::read(&err_log_path) {
         let max = 2048;
-        let tail = if bytes.len() > max { &bytes[bytes.len() - max..] } else { &bytes[..] };
+        let tail = if bytes.len() > max {
+            &bytes[bytes.len() - max..]
+        } else {
+            &bytes[..]
+        };
         String::from_utf8_lossy(tail).to_string()
     } else {
         String::new()
@@ -123,18 +137,16 @@ fn check_config() -> DiagnoseStep {
         return finish_step("config", false, "openclaw.json 不存在", t);
     }
     match std::fs::read_to_string(&config_path) {
-        Ok(content) => {
-            match serde_json::from_str::<serde_json::Value>(&content) {
-                Ok(val) => {
-                    if val.get("gateway").is_some() {
-                        finish_step("config", true, "配置文件有效，含 gateway 配置", t)
-                    } else {
-                        finish_step("config", false, "配置文件缺少 gateway 段", t)
-                    }
+        Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(val) => {
+                if val.get("gateway").is_some() {
+                    finish_step("config", true, "配置文件有效，含 gateway 配置", t)
+                } else {
+                    finish_step("config", false, "配置文件缺少 gateway 段", t)
                 }
-                Err(e) => finish_step("config", false, &format!("JSON 解析失败: {e}"), t),
             }
-        }
+            Err(e) => finish_step("config", false, &format!("JSON 解析失败: {e}"), t),
+        },
         Err(e) => finish_step("config", false, &format!("读取失败: {e}"), t),
     }
 }
@@ -159,7 +171,12 @@ fn check_device_key() -> DiagnoseStep {
             Err(e) => finish_step("device_key", false, &format!("读取失败: {e}"), t),
         }
     } else {
-        finish_step("device_key", false, "设备密钥不存在（将在首次连接时自动生成）", t)
+        finish_step(
+            "device_key",
+            false,
+            "设备密钥不存在（将在首次连接时自动生成）",
+            t,
+        )
     }
 }
 
@@ -178,15 +195,32 @@ fn check_allowed_origins() -> DiagnoseStep {
                 match origins {
                     Some(arr) if !arr.is_empty() => {
                         let list: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
-                        let has_tauri = list.iter().any(|o| o.contains("tauri://") || o.contains("https://tauri.localhost"));
+                        let has_tauri = list.iter().any(|o| {
+                            o.contains("tauri://") || o.contains("https://tauri.localhost")
+                        });
                         if has_tauri {
-                            finish_step("allowed_origins", true, &format!("allowedOrigins 包含 Tauri origin: {:?}", list), t)
+                            finish_step(
+                                "allowed_origins",
+                                true,
+                                &format!("allowedOrigins 包含 Tauri origin: {:?}", list),
+                                t,
+                            )
                         } else {
-                            finish_step("allowed_origins", false, &format!("allowedOrigins 缺少 Tauri origin: {:?}", list), t)
+                            finish_step(
+                                "allowed_origins",
+                                false,
+                                &format!("allowedOrigins 缺少 Tauri origin: {:?}", list),
+                                t,
+                            )
                         }
                     }
                     Some(_) => finish_step("allowed_origins", false, "allowedOrigins 为空数组", t),
-                    None => finish_step("allowed_origins", false, "未配置 allowedOrigins（autoPair 会自动修复）", t),
+                    None => finish_step(
+                        "allowed_origins",
+                        false,
+                        "未配置 allowedOrigins（autoPair 会自动修复）",
+                        t,
+                    ),
                 }
             } else {
                 finish_step("allowed_origins", false, "配置文件解析失败", t)
@@ -208,21 +242,43 @@ async fn check_http_health(port: u16) -> DiagnoseStep {
             Ok(resp) => {
                 let status = resp.status();
                 if status.is_success() {
-                    finish_step("http_health", true, &format!("HTTP /health 返回 {status}"), t)
+                    finish_step(
+                        "http_health",
+                        true,
+                        &format!("HTTP /health 返回 {status}"),
+                        t,
+                    )
                 } else {
-                    finish_step("http_health", false, &format!("HTTP /health 返回 {status}"), t)
+                    finish_step(
+                        "http_health",
+                        false,
+                        &format!("HTTP /health 返回 {status}"),
+                        t,
+                    )
                 }
             }
-            Err(e) => finish_step("http_health", false, &format!("HTTP /health 请求失败: {e}"), t),
+            Err(e) => finish_step(
+                "http_health",
+                false,
+                &format!("HTTP /health 请求失败: {e}"),
+                t,
+            ),
         },
-        Err(e) => finish_step("http_health", false, &format!("HTTP client 创建失败: {e}"), t),
+        Err(e) => finish_step(
+            "http_health",
+            false,
+            &format!("HTTP client 创建失败: {e}"),
+            t,
+        ),
     }
 }
 
 /// 检查 Gateway 错误日志
 fn check_error_log() -> DiagnoseStep {
     let t = step_timer();
-    let log_path = crate::commands::openclaw_dir().join("logs").join("gateway.err.log");
+    let log_path = crate::commands::openclaw_dir()
+        .join("logs")
+        .join("gateway.err.log");
     if !log_path.exists() {
         return finish_step("err_log", true, "无错误日志（正常）", t);
     }
@@ -234,13 +290,29 @@ fn check_error_log() -> DiagnoseStep {
             } else {
                 // 读最后 1KB 看有没有关键错误
                 let content = std::fs::read(&log_path).unwrap_or_default();
-                let tail = if content.len() > 1024 { &content[content.len() - 1024..] } else { &content[..] };
-                let text = String::from_utf8_lossy(tail).to_lowercase();
-                let has_fatal = text.contains("fatal") || text.contains("eaddrinuse") || text.contains("config invalid");
-                if has_fatal {
-                    finish_step("err_log", false, &format!("错误日志含关键错误 ({size} bytes)"), t)
+                let tail = if content.len() > 1024 {
+                    &content[content.len() - 1024..]
                 } else {
-                    finish_step("err_log", true, &format!("错误日志存在但无致命错误 ({size} bytes)"), t)
+                    &content[..]
+                };
+                let text = String::from_utf8_lossy(tail).to_lowercase();
+                let has_fatal = text.contains("fatal")
+                    || text.contains("eaddrinuse")
+                    || text.contains("config invalid");
+                if has_fatal {
+                    finish_step(
+                        "err_log",
+                        false,
+                        &format!("错误日志含关键错误 ({size} bytes)"),
+                        t,
+                    )
+                } else {
+                    finish_step(
+                        "err_log",
+                        true,
+                        &format!("错误日志存在但无致命错误 ({size} bytes)"),
+                        t,
+                    )
                 }
             }
         }
@@ -274,7 +346,11 @@ pub async fn diagnose_gateway_connection() -> DiagnoseResult {
     steps.push(check_error_log());
 
     let overall_ok = steps.iter().all(|s| s.ok);
-    let failed: Vec<&str> = steps.iter().filter(|s| !s.ok).map(|s| s.name.as_str()).collect();
+    let failed: Vec<&str> = steps
+        .iter()
+        .filter(|s| !s.ok)
+        .map(|s| s.name.as_str())
+        .collect();
     let summary = if overall_ok {
         "所有检查项通过".to_string()
     } else {

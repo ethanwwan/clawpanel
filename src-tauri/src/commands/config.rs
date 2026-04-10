@@ -486,17 +486,28 @@ fn npm_command_elevated() -> Command {
 /// 解决 Windows 上 EEXIST（文件已存在）和文件被占用的问题
 fn pre_install_cleanup() {
     /// 带超时执行命令（spawn + try_wait），防止任何子进程无限阻塞
-    fn run_with_timeout(mut child: std::process::Child, timeout_secs: u64) -> Option<std::process::Output> {
+    fn run_with_timeout(
+        mut child: std::process::Child,
+        timeout_secs: u64,
+    ) -> Option<std::process::Output> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    let stdout = child.stdout.take().map(|mut s| {
-                        let mut buf = Vec::new();
-                        let _ = std::io::Read::read_to_end(&mut s, &mut buf);
-                        buf
-                    }).unwrap_or_default();
-                    return Some(std::process::Output { status, stdout, stderr: Vec::new() });
+                    let stdout = child
+                        .stdout
+                        .take()
+                        .map(|mut s| {
+                            let mut buf = Vec::new();
+                            let _ = std::io::Read::read_to_end(&mut s, &mut buf);
+                            buf
+                        })
+                        .unwrap_or_default();
+                    return Some(std::process::Output {
+                        status,
+                        stdout,
+                        stderr: Vec::new(),
+                    });
                 }
                 Ok(None) => {
                     if std::time::Instant::now() >= deadline {
@@ -546,7 +557,10 @@ fn pre_install_cleanup() {
         // 同时杀死 standalone 目录下的 node.exe 进程（每个目录 10s 超时）
         for sa_dir in all_standalone_dirs() {
             if sa_dir.exists() {
-                let dir_lower = sa_dir.to_string_lossy().to_lowercase().replace('\\', "\\\\");
+                let dir_lower = sa_dir
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .replace('\\', "\\\\");
                 let ps_script = format!(
                     "Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.ToLower().Contains('{}') }} | Select-Object -ExpandProperty Id",
                     dir_lower
@@ -561,7 +575,9 @@ fn pre_install_cleanup() {
                         let text = String::from_utf8_lossy(&output.stdout);
                         for line in text.lines() {
                             if let Ok(_pid) = line.trim().parse::<u32>() {
-                                let _ = Command::new("taskkill").args(["/F", "/PID", line.trim()]).output();
+                                let _ = Command::new("taskkill")
+                                    .args(["/F", "/PID", line.trim()])
+                                    .output();
                             }
                         }
                     }
@@ -2971,9 +2987,7 @@ async fn try_standalone_install(
     // 兼容两种 latest.json 格式：
     // 新格式（CI 生成）: { "editions": { "zh": { "version": "...", "base_url": "..." } } }
     // 旧格式（兼容）:   { "version": "...", "base_url": "..." }
-    let edition_obj = manifest
-        .get("editions")
-        .and_then(|e| e.get("zh"));
+    let edition_obj = manifest.get("editions").and_then(|e| e.get("zh"));
     let (remote_version, manifest_base_url, archive_prefix) = if let Some(ed) = edition_obj {
         let ver = ed
             .get("version")
@@ -3059,7 +3073,10 @@ async fn try_standalone_install(
                         let dl_mb = downloaded as f64 / 1_048_576.0;
                         let total_mb = total_bytes as f64 / 1_048_576.0;
                         let real_pct = (downloaded as f64 / total_bytes as f64 * 100.0) as u32;
-                        let _ = app.emit("upgrade-log", format!("下载中 {real_pct}% ({dl_mb:.0}/{total_mb:.0}MB)"));
+                        let _ = app.emit(
+                            "upgrade-log",
+                            format!("下载中 {real_pct}% ({dl_mb:.0}/{total_mb:.0}MB)"),
+                        );
                     }
                     last_progress = pct;
                     let _ = app.emit("upgrade-progress", pct.min(70));
@@ -3581,7 +3598,9 @@ async fn upgrade_openclaw_inner(
                             let _ = app.emit("upgrade-progress", 100);
                             super::refresh_enhanced_path();
                             crate::commands::service::invalidate_cli_detection_cache();
-                            let msg = format!("✅ standalone (GitHub) 安装完成，当前版本: {installed_ver}");
+                            let msg = format!(
+                                "✅ standalone (GitHub) 安装完成，当前版本: {installed_ver}"
+                            );
                             let _ = app.emit("upgrade-log", &msg);
                             return Ok(msg);
                         }
@@ -3593,7 +3612,9 @@ async fn upgrade_openclaw_inner(
                                 );
                                 let _ = app.emit("upgrade-progress", 5);
                             } else {
-                                return Err(format!("standalone 安装失败: CDN={cdn_reason}, GitHub={gh_reason}"));
+                                return Err(format!(
+                                    "standalone 安装失败: CDN={cdn_reason}, GitHub={gh_reason}"
+                                ));
                             }
                         }
                     }
@@ -3872,7 +3893,10 @@ async fn upgrade_openclaw_inner(
                 // 使用 PowerShell Get-Process（兼容 Windows 11，wmic 已废弃）
                 #[cfg(target_os = "windows")]
                 {
-                    let dir_lower = sa_dir.to_string_lossy().to_lowercase().replace('\\', "\\\\");
+                    let dir_lower = sa_dir
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .replace('\\', "\\\\");
                     let ps_script = format!(
                         "Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.ToLower().Contains('{}') }} | Select-Object -ExpandProperty Id",
                         dir_lower
@@ -3884,8 +3908,11 @@ async fn upgrade_openclaw_inner(
                         let text = String::from_utf8_lossy(&output.stdout);
                         for line in text.lines() {
                             if let Ok(pid) = line.trim().parse::<u32>() {
-                                let _ = app.emit("upgrade-log", format!("终止占用进程 PID {pid}..."));
-                                let _ = Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).output();
+                                let _ =
+                                    app.emit("upgrade-log", format!("终止占用进程 PID {pid}..."));
+                                let _ = Command::new("taskkill")
+                                    .args(["/F", "/PID", &pid.to_string()])
+                                    .output();
                             }
                         }
                     }
@@ -3902,7 +3929,10 @@ async fn upgrade_openclaw_inner(
                         if let Err(e) = std::fs::remove_dir_all(&sa_dir) {
                             let _ = app.emit(
                                 "upgrade-log",
-                                format!("⚠️ 清理 standalone 残留失败: {e}（可手动删除 {}）", sa_dir.display()),
+                                format!(
+                                    "⚠️ 清理 standalone 残留失败: {e}（可手动删除 {}）",
+                                    sa_dir.display()
+                                ),
                             );
                         } else {
                             let _ = app.emit("upgrade-log", "standalone 残留已清理（重试成功）✓");
@@ -4033,7 +4063,10 @@ async fn uninstall_openclaw_inner(
             // 使用 PowerShell Get-Process（兼容 Windows 11，wmic 已废弃）
             #[cfg(target_os = "windows")]
             {
-                let dir_lower = sa_dir.to_string_lossy().to_lowercase().replace('\\', "\\\\");
+                let dir_lower = sa_dir
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .replace('\\', "\\\\");
                 let ps_script = format!(
                     "Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.ToLower().Contains('{}') }} | Select-Object -ExpandProperty Id",
                     dir_lower
@@ -4046,7 +4079,9 @@ async fn uninstall_openclaw_inner(
                     for line in text.lines() {
                         if let Ok(pid) = line.trim().parse::<u32>() {
                             let _ = app.emit("upgrade-log", format!("终止占用进程 PID {pid}..."));
-                            let _ = Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).output();
+                            let _ = Command::new("taskkill")
+                                .args(["/F", "/PID", &pid.to_string()])
+                                .output();
                         }
                     }
                 }
@@ -4066,7 +4101,10 @@ async fn uninstall_openclaw_inner(
                     if let Err(e) = std::fs::remove_dir_all(sa_dir) {
                         let _ = app.emit(
                             "upgrade-log",
-                            format!("⚠️ 清理 standalone 失败: {e}（可手动删除 {}）", sa_dir.display()),
+                            format!(
+                                "⚠️ 清理 standalone 失败: {e}（可手动删除 {}）",
+                                sa_dir.display()
+                            ),
                         );
                     } else {
                         let _ = app.emit("upgrade-log", "standalone 安装已清理（重试成功）✓");
@@ -4903,14 +4941,13 @@ async fn reload_gateway_internal(app: Option<&tauri::AppHandle>) -> Result<Strin
     {
         match reload_gateway_via_http().await {
             Ok(msg) => Ok(msg),
-            Err(_) => {
-                crate::commands::service::restart_service(
-                    app.cloned().ok_or_else(|| "缺少 AppHandle，无法回退到 Gateway 进程重启".to_string())?,
-                    "ai.openclaw.gateway".into(),
-                )
-                .await
-                .map(|_| "Gateway 已重启".to_string())
-            }
+            Err(_) => crate::commands::service::restart_service(
+                app.cloned()
+                    .ok_or_else(|| "缺少 AppHandle，无法回退到 Gateway 进程重启".to_string())?,
+                "ai.openclaw.gateway".into(),
+            )
+            .await
+            .map(|_| "Gateway 已重启".to_string()),
         }
     }
 }

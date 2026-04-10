@@ -62,11 +62,8 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         "gateway_start" => {
             let app2 = app.clone();
             tauri::async_runtime::spawn(async move {
-                let _ = crate::commands::service::start_service(
-                    app2,
-                    "ai.openclaw.gateway".into(),
-                )
-                .await;
+                let _ = crate::commands::service::start_service(app2, "ai.openclaw.gateway".into())
+                    .await;
             });
         }
         "gateway_stop" => {
@@ -77,11 +74,9 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         "gateway_restart" => {
             let app2 = app.clone();
             tauri::async_runtime::spawn(async move {
-                let _ = crate::commands::service::restart_service(
-                    app2,
-                    "ai.openclaw.gateway".into(),
-                )
-                .await;
+                let _ =
+                    crate::commands::service::restart_service(app2, "ai.openclaw.gateway".into())
+                        .await;
             });
         }
         "quit" => {

@@ -281,8 +281,8 @@ fn looks_like_gateway_config_mismatch(reason: &str) -> bool {
 /// 当 `openclaw doctor --fix` 无法修复时作为二级回退
 fn try_direct_config_strip() -> Result<bool, String> {
     let config_path = crate::commands::openclaw_dir().join("openclaw.json");
-    let raw = std::fs::read_to_string(&config_path)
-        .map_err(|e| format!("读取配置文件失败: {e}"))?;
+    let raw =
+        std::fs::read_to_string(&config_path).map_err(|e| format!("读取配置文件失败: {e}"))?;
     let mut doc: serde_json::Value =
         serde_json::from_str(&raw).map_err(|e| format!("解析配置文件失败: {e}"))?;
 
@@ -346,10 +346,9 @@ fn try_direct_config_strip() -> Result<bool, String> {
     }
 
     if changed {
-        let formatted = serde_json::to_string_pretty(&doc)
-            .map_err(|e| format!("序列化配置失败: {e}"))?;
-        std::fs::write(&config_path, formatted)
-            .map_err(|e| format!("写入配置文件失败: {e}"))?;
+        let formatted =
+            serde_json::to_string_pretty(&doc).map_err(|e| format!("序列化配置失败: {e}"))?;
+        std::fs::write(&config_path, formatted).map_err(|e| format!("写入配置文件失败: {e}"))?;
         guardian_log("直接修复: 已写回 openclaw.json");
     }
 
@@ -458,7 +457,10 @@ async fn try_auto_fix_gateway_config(
                 "auto_fix_failure",
                 "已尝试自动执行 openclaw doctor --fix，但修复超时 (30s)",
             );
-            Err("检测到 Gateway 配置异常，已尝试自动执行 openclaw doctor --fix，但修复超时 (30s)".into())
+            Err(
+                "检测到 Gateway 配置异常，已尝试自动执行 openclaw doctor --fix，但修复超时 (30s)"
+                    .into(),
+            )
         }
     }
 }
@@ -897,11 +899,17 @@ mod platform {
             Err(_) => return (false, None),
         };
         // 两次尝试：第一次 1 秒，失败后短暂等待再用 2 秒重试，避免瞬态超时误判
-        let connected = std::net::TcpStream::connect_timeout(&socket_addr, std::time::Duration::from_secs(1)).is_ok()
-            || {
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                std::net::TcpStream::connect_timeout(&socket_addr, std::time::Duration::from_secs(2)).is_ok()
-            };
+        let connected =
+            std::net::TcpStream::connect_timeout(&socket_addr, std::time::Duration::from_secs(1))
+                .is_ok()
+                || {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    std::net::TcpStream::connect_timeout(
+                        &socket_addr,
+                        std::time::Duration::from_secs(2),
+                    )
+                    .is_ok()
+                };
         if connected {
             let pid = get_pid_by_lsof(port);
             (true, pid)
@@ -1158,13 +1166,11 @@ mod platform {
         use std::io::{Read, Write as IoWrite};
         use std::net::TcpStream;
         let addr = format!("127.0.0.1:{port}");
-        let mut stream = match TcpStream::connect_timeout(
-            &addr.parse().unwrap(),
-            Duration::from_secs(3),
-        ) {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
+        let mut stream =
+            match TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_secs(3)) {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
         let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
         let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
         let req = format!("GET /health HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\n\r\n");
@@ -1227,7 +1233,8 @@ mod platform {
 
             if let Some(cmdline) = read_process_command_line(pid) {
                 let cmdline_lower = cmdline.to_lowercase();
-                let is_gateway = cmdline_lower.contains("openclaw") && cmdline_lower.contains("gateway");
+                let is_gateway =
+                    cmdline_lower.contains("openclaw") && cmdline_lower.contains("gateway");
                 let our_pid = *LAST_KNOWN_GATEWAY_PID.lock().unwrap();
 
                 if is_gateway {
@@ -1500,8 +1507,8 @@ mod platform {
             Err(_) => return (false, None),
         };
         // 两次尝试：第一次 1 秒，失败后短暂等待再用 2 秒重试，避免瞬态超时误判
-        let connected = std::net::TcpStream::connect_timeout(&socket_addr, Duration::from_secs(1)).is_ok()
-            || {
+        let connected =
+            std::net::TcpStream::connect_timeout(&socket_addr, Duration::from_secs(1)).is_ok() || {
                 std::thread::sleep(Duration::from_millis(300));
                 std::net::TcpStream::connect_timeout(&socket_addr, Duration::from_secs(2)).is_ok()
             };

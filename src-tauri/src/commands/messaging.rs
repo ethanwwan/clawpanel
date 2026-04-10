@@ -2122,13 +2122,19 @@ pub async fn list_all_plugins() -> Result<Value, String> {
         if let Ok(rd) = std::fs::read_dir(&ext_dir) {
             for entry in rd.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with('.') { continue; }
+                if name.starts_with('.') {
+                    continue;
+                }
                 let p = entry.path();
-                if !p.is_dir() { continue; }
+                if !p.is_dir() {
+                    continue;
+                }
                 let has_marker = p.join("package.json").is_file()
                     || p.join("plugin.ts").is_file()
                     || p.join("index.js").is_file();
-                if !has_marker { continue; }
+                if !has_marker {
+                    continue;
+                }
 
                 let plugin_id = name.clone();
                 seen.insert(plugin_id.clone());
@@ -2150,7 +2156,10 @@ pub async fn list_all_plugins() -> Result<Value, String> {
                 let description = std::fs::read_to_string(p.join("package.json"))
                     .ok()
                     .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-                    .and_then(|v| v.get("description").and_then(|v| v.as_str().map(String::from)));
+                    .and_then(|v| {
+                        v.get("description")
+                            .and_then(|v| v.as_str().map(String::from))
+                    });
 
                 plugins.push(json!({
                     "id": plugin_id,
@@ -2168,9 +2177,14 @@ pub async fn list_all_plugins() -> Result<Value, String> {
 
     // Also include entries from config that might not be in extensions dir (built-in)
     for (pid, entry_val) in &entries {
-        if seen.contains(pid.as_str()) { continue; }
+        if seen.contains(pid.as_str()) {
+            continue;
+        }
         seen.insert(pid.clone());
-        let enabled = entry_val.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+        let enabled = entry_val
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let allowed = allow_arr.iter().any(|v| v.as_str() == Some(pid.as_str()));
         let builtin = is_plugin_builtin(pid);
         plugins.push(json!({
@@ -3275,11 +3289,9 @@ pub async fn install_qqbot_plugin(
             );
             let app2 = app.clone();
             tauri::async_runtime::spawn(async move {
-                let _ = crate::commands::service::restart_service(
-                    app2,
-                    "ai.openclaw.gateway".into(),
-                )
-                .await;
+                let _ =
+                    crate::commands::service::restart_service(app2, "ai.openclaw.gateway".into())
+                        .await;
             });
             Ok("安装成功".into())
         }

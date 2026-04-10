@@ -36,10 +36,7 @@ fn default_openclaw_dir() -> PathBuf {
 fn panel_path_key(path: &std::path::Path) -> String {
     #[cfg(target_os = "windows")]
     {
-        return path
-            .to_string_lossy()
-            .replace('/', "\\")
-            .to_lowercase();
+        return path.to_string_lossy().replace('/', "\\").to_lowercase();
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -66,21 +63,24 @@ fn panel_config_candidate_paths() -> Vec<PathBuf> {
             if !trimmed.is_empty() {
                 push_unique_panel_config_path(
                     &mut paths,
-                    PathBuf::from(trimmed).join(".openclaw").join("clawpanel.json"),
+                    PathBuf::from(trimmed)
+                        .join(".openclaw")
+                        .join("clawpanel.json"),
                 );
             }
         }
 
-        if let (Ok(home_drive), Ok(home_path)) = (
-            std::env::var("HOMEDRIVE"),
-            std::env::var("HOMEPATH"),
-        ) {
+        if let (Ok(home_drive), Ok(home_path)) =
+            (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH"))
+        {
             let combined = format!("{}{}", home_drive.trim(), home_path.trim());
             let trimmed = combined.trim();
             if !trimmed.is_empty() {
                 push_unique_panel_config_path(
                     &mut paths,
-                    PathBuf::from(trimmed).join(".openclaw").join("clawpanel.json"),
+                    PathBuf::from(trimmed)
+                        .join(".openclaw")
+                        .join("clawpanel.json"),
                 );
             }
         }
