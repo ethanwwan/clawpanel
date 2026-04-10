@@ -1,4 +1,3 @@
-#[cfg(not(target_os = "macos"))]
 use crate::utils::openclaw_command;
 /// 配置读写命令
 use serde::Deserialize;

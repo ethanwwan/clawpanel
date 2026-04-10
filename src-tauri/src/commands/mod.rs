@@ -36,7 +36,7 @@ fn default_openclaw_dir() -> PathBuf {
 fn panel_path_key(path: &std::path::Path) -> String {
     #[cfg(target_os = "windows")]
     {
-        return path.to_string_lossy().replace('/', "\\").to_lowercase();
+        path.to_string_lossy().replace('/', "\\").to_lowercase()
     }
     #[cfg(not(target_os = "windows"))]
     {

@@ -2122,8 +2122,5 @@ pub async fn claim_gateway() -> Result<(), String> {
 pub async fn probe_gateway_port() -> bool {
     let port = crate::commands::gateway_listen_port();
     let addr = format!("127.0.0.1:{port}");
-    match tokio::net::TcpStream::connect(&addr).await {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    tokio::net::TcpStream::connect(&addr).await.is_ok()
 }
