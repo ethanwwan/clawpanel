@@ -3,10 +3,6 @@
  * 管理 openclaw 安装状态，供各组件查询
  */
 import { api } from './tauri-api.js'
-import {
-  evaluateAutoRestartAttempt,
-  shouldResetAutoRestartCount,
-} from './gateway-guardian-policy.js'
 
 const isTauri = !!window.__TAURI_INTERNALS__
 
@@ -22,10 +18,8 @@ let _gwListeners = []
 let _gwStopCount = 0  // 连续检测到"停止"的次数，防抖用
 let _isUpgrading = false // 升级/切换版本期间，阻止 setup 跳转
 let _userStopped = false // 用户主动停止，不自动拉起
-let _autoRestartCount = 0 // 自动重启次数
-let _lastRestartTime = 0  // 上次重启时间
 let _gatewayRunningSince = 0 // Gateway 最近一次进入稳定运行状态的时间
-let _guardianListeners = [] // 守护放弃时的回调
+let _guardianListeners = [] // 守护放弃时的回调（后端 guardian-event 触发）
 
 /** openclaw 是否就绪（CLI 已安装 + 配置文件存在） */
 export function isOpenclawReady() {
@@ -41,10 +35,8 @@ export function isUpgrading() { return _isUpgrading }
 /** 标记用户主动停止 Gateway（不触发自动重启） */
 export function setUserStopped(v) { _userStopped = !!v }
 
-/** 重置自动重启计数（用户手动启动后重置） */
+/** 重置守护状态（用户手动启动后重置） */
 export function resetAutoRestart() {
-  _autoRestartCount = 0
-  _lastRestartTime = 0
   _gatewayRunningSince = 0
   _userStopped = false
 }
@@ -158,60 +150,12 @@ function _setGatewayRunning(val, foreign = false) {
       _gatewayRunningSince = Date.now()
     } else if (wasRunning && !_userStopped && !_isUpgrading && _openclawReady && !foreign) {
       _gatewayRunningSince = 0
-      // Gateway 意外停止，尝试自动重启
-      _tryAutoRestart()
+      // Gateway 意外停止 → 后端 Rust guardian 负责自动重启，前端仅更新 UI 状态
+      console.log('[app-state] Gateway 意外停止，等待后端 guardian 重启...')
     } else if (!val) {
       _gatewayRunningSince = 0
     }
     _gwListeners.forEach(fn => { try { fn(val, foreign) } catch {} })
-  }
-}
-
-async function _tryAutoRestart() {
-  const now = Date.now()
-  const decision = evaluateAutoRestartAttempt({
-    now,
-    lastRestartTime: _lastRestartTime,
-    autoRestartCount: _autoRestartCount,
-  })
-
-  if (decision.action === 'cooldown') return
-
-  if (decision.action === 'give_up') {
-    console.warn('[guardian] Gateway 已达到自动重启上限，停止守护，请手动检查')
-    _guardianListeners.forEach(fn => { try { fn() } catch {} })
-    return
-  }
-
-  // 延迟 3 秒后再次确认端口确实空闲，防止瞬态 TCP 超时误判触发不必要的重启
-  await new Promise(r => setTimeout(r, 3000))
-  try {
-    const { invalidate } = await import('./tauri-api.js')
-    invalidate('get_services_status')
-    const services = await api.getServicesStatus()
-    const gw = services?.find?.(s => s.label === 'ai.openclaw.gateway') || services?.[0]
-    if (gw?.running) {
-      console.log(gw?.owned_by_current_instance === false
-        ? '[guardian] 检测到外部 Gateway 正在占用端口，跳过自动重启'
-        : '[guardian] 端口仍在使用中，跳过自动重启')
-      _gwStopCount = 0
-      if (gw?.owned_by_current_instance !== false) {
-        _gatewayRunning = true
-        _gatewayRunningSince = Date.now()
-        _gwListeners.forEach(fn => { try { fn(true) } catch {} })
-      }
-      return
-    }
-  } catch {}
-
-  _autoRestartCount = decision.autoRestartCount
-  _lastRestartTime = decision.lastRestartTime
-  console.log(`[guardian] Gateway 意外停止，自动重启 (${_autoRestartCount}/3)...`)
-  try {
-    await api.startService('ai.openclaw.gateway')
-    console.log('[guardian] Gateway 自动重启成功')
-  } catch (e) {
-    console.error('[guardian] Gateway 自动重启失败:', e)
   }
 }
 
@@ -229,12 +173,6 @@ export async function refreshGatewayStatus() {
         _gwStopCount = 0
         if (!_gatewayRunning) {
           _setGatewayRunning(true, false)
-        } else if (shouldResetAutoRestartCount({
-          autoRestartCount: _autoRestartCount,
-          runningSince: _gatewayRunningSince,
-          now: Date.now(),
-        })) {
-          _autoRestartCount = 0
         }
       } else {
         if (foreignRunning) {

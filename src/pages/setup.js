@@ -3,7 +3,7 @@
  * 自动检测环境 → 版本选择 → 一键安装 → 自动跳转
  */
 import { api, invalidate } from '../lib/tauri-api.js'
-import { showUpgradeModal } from '../components/modal.js'
+import { showConfirm, showUpgradeModal } from '../components/modal.js'
 import { toast } from '../components/toast.js'
 import { setUpgrading, isMacPlatform } from '../lib/app-state.js'
 import { diagnoseInstallError } from '../lib/error-diagnosis.js'
@@ -109,6 +109,51 @@ export async function render() {
   page.querySelector('#btn-recheck').addEventListener('click', () => runDetect(page))
   runDetect(page)
   return page
+}
+
+async function maybeRefreshGatewayServiceBinding() {
+  if (!isMacPlatform()) return false
+
+  const [versionInfo, dirInfo] = await Promise.all([
+    api.getVersionInfo().catch(() => null),
+    api.getOpenclawDir().catch(() => null),
+  ])
+  if (!versionInfo?.cli_path || dirInfo?.configExists === false) {
+    return false
+  }
+
+  const shouldRefresh = await showConfirm(t('settings.gatewayServiceRefreshConfirm'))
+  if (!shouldRefresh) return false
+
+  toast(t('settings.gatewayServiceRefreshing'), 'info')
+  try {
+    const services = await api.getServicesStatus().catch(() => [])
+    const gw = services?.find?.(s => s.label === 'ai.openclaw.gateway') || services?.[0] || null
+    const shouldStartAgain = gw?.running === true && gw?.owned_by_current_instance !== false
+
+    await api.uninstallGateway().catch(() => {})
+    await api.installGateway()
+    if (shouldStartAgain) {
+      await api.startService('ai.openclaw.gateway')
+    }
+
+    toast(t('settings.gatewayServiceRefreshed'), 'success')
+    return true
+  } catch (e) {
+    toast(`${t('settings.gatewayServiceRefreshFailed')}: ${e?.message || e}`, 'warning')
+    return false
+  }
+}
+
+async function promptRestart(msg) {
+  if (!window.__TAURI_INTERNALS__) { toast(msg, 'success'); return }
+  const ok = await showConfirm(`${msg}\n\n${t('settings.restartConfirm')}`)
+  if (ok) {
+    toast(t('settings.restarting'), 'info')
+    try { await api.relaunchApp() } catch { toast(t('settings.restartFailed'), 'warning') }
+  } else {
+    toast(`${msg}, ${t('settings.effectNextLaunch')}`, 'success')
+  }
 }
 
 async function runDetect(page) {
@@ -620,7 +665,10 @@ function bindEvents(page, nodeOk, detectState) {
       await api.writePanelConfig(cfg)
       invalidate()
       if (dirResultEl) dirResultEl.innerHTML = `<span style="color:var(--success)">✓ ${t('setup.pathSaved')}</span>`
-      toast(t('setup.customPathSaved'), 'success')
+      const savedMsg = t('setup.customPathSaved')
+      const refreshed = await maybeRefreshGatewayServiceBinding()
+      if (refreshed) toast(savedMsg, 'success')
+      else await promptRestart(savedMsg)
       setTimeout(() => runDetect(page), 500)
     } catch (e) {
       if (dirResultEl) dirResultEl.innerHTML = `<span style="color:var(--error)">${t('setup.saveFailed', { err: e })}</span>`
@@ -673,7 +721,10 @@ function bindEvents(page, nodeOk, detectState) {
       invalidate()
       if (dirInput) dirInput.value = ''
       if (dirResultEl) { dirResultEl.style.display = 'block'; dirResultEl.innerHTML = `<span style="color:var(--success)">✓ ${t('setup.defaultRestored')}</span>` }
-      toast(t('setup.defaultRestoredToast'), 'success')
+      const restoredMsg = t('setup.defaultRestoredToast')
+      const refreshed = await maybeRefreshGatewayServiceBinding()
+      if (refreshed) toast(restoredMsg, 'success')
+      else await promptRestart(restoredMsg)
       setTimeout(() => runDetect(page), 500)
     } catch (e) {
       toast(t('setup.restoreFailed', { err: e }), 'error')
@@ -779,7 +830,9 @@ function bindEvents(page, nodeOk, detectState) {
         resultEl.style.display = 'block'
         resultEl.innerHTML = `<span style="color:var(--success)">✓ ${successText}</span>`
       }
-      toast(successText, 'success')
+      const refreshed = await maybeRefreshGatewayServiceBinding()
+      if (refreshed) toast(successText, 'success')
+      else await promptRestart(successText)
       setTimeout(() => runDetect(page), 300)
       return true
     } catch (e) {

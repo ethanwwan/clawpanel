@@ -189,6 +189,8 @@ export const api = {
   stopService: (label) => { invalidate('get_services_status'); return invoke('stop_service', { label }) },
   restartService: (label) => { invalidate('get_services_status'); return invoke('restart_service', { label }) },
   claimGateway: () => { invalidate('get_services_status'); return invoke('claim_gateway') },
+  probeGatewayPort: () => invoke('probe_gateway_port'),
+  diagnoseGatewayConnection: () => invoke('diagnose_gateway_connection'),
   guardianStatus: () => invoke('guardian_status'),
 
   // 配置（读缓存，写清缓存）
@@ -256,6 +258,9 @@ export const api = {
     return invoke('repair_qqbot_channel_setup')
   },
   listConfiguredPlatforms: () => cachedInvoke('list_configured_platforms', {}, 5000),
+  listAllPlugins: () => cachedInvoke('list_all_plugins', {}, 5000),
+  togglePlugin: (pluginId, enabled) => { invalidate('list_all_plugins'); return invoke('toggle_plugin', { pluginId, enabled }) },
+  installPlugin: (packageName) => { invalidate('list_all_plugins'); return invoke('install_plugin', { packageName }) },
   getChannelPluginStatus: (pluginId) => invoke('get_channel_plugin_status', { pluginId }),
   installQqbotPlugin: (version = null) => invoke('install_qqbot_plugin', { version }),
   installChannelPlugin: (packageName, pluginId, version = null) => invoke('install_channel_plugin', { packageName, pluginId, version }),
@@ -302,7 +307,7 @@ export const api = {
   deleteBackup: (name) => { invalidate('list_backups'); return invoke('delete_backup', { name }) },
 
   // 设备密钥 + Gateway 握手
-  createConnectFrame: (nonce, gatewayToken) => invoke('create_connect_frame', { nonce, gatewayToken }),
+  createConnectFrame: (nonce, gatewayToken, gatewayPassword) => invoke('create_connect_frame', { nonce, gatewayToken, gatewayPassword: gatewayPassword || null }),
 
   // 设备配对
   autoPairDevice: () => invoke('auto_pair_device'),

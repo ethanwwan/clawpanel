@@ -146,6 +146,12 @@ async function loadData(page) {
         const confirmed = await showConfirm(t('about.confirmUninstall'))
         if (!confirmed) return
         const modal = showUpgradeModal(t('about.uninstallTitle'))
+        modal.setProgressLabels({
+          preparing: t('about.uninstallStopping'),
+          downloading: t('about.uninstallRemoving'),
+          installing: t('about.uninstallCleaning'),
+          done: t('about.uninstallDone'),
+        })
         modal.onClose(() => loadData(page))
         modal.appendLog(t('about.uninstallStarting'))
         let unlistenLog, unlistenProgress, unlistenDone, unlistenError

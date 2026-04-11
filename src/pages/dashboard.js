@@ -7,6 +7,7 @@ import { getActiveInstance, onGatewayChange } from '../lib/app-state.js'
 import { isForeignGatewayError, isForeignGatewayService, maybeShowForeignGatewayBindingPrompt, showGatewayConflictGuidance } from '../lib/gateway-ownership.js'
 import { navigate } from '../router.js'
 import { t } from '../lib/i18n.js'
+import { wsClient } from '../lib/ws-client.js'
 
 let _unsubGw = null
 let _loadInFlight = false
@@ -136,7 +137,8 @@ async function _loadDashboardDataInner(page, fullRefresh) {
     api.listAgents(),
     api.readMcpConfig(),
     api.listBackups(),
-  ]), 15000).catch(() => [{ status: 'rejected' }, { status: 'rejected' }, { status: 'rejected' }])
+    api.listConfiguredPlatforms().catch(() => []),
+  ]), 15000).catch(() => [{ status: 'rejected' }, { status: 'rejected' }, { status: 'rejected' }, { status: 'rejected' }])
   const logsP = api.readLogTail('gateway', 20).catch(() => '')
 
   // 第一波：服务状态 + 配置 + 版本 → 立即渲染统计卡片
@@ -189,10 +191,11 @@ async function _loadDashboardDataInner(page, fullRefresh) {
   }
 
   // 第二波：Agent、MCP、备份 → 更新卡片 + 渲染总览
-  const [agentsRes, mcpRes, backupsRes] = await secondaryP
+  const [agentsRes, mcpRes, backupsRes, channelsRes] = await secondaryP
   const agents = agentsRes.status === 'fulfilled' ? agentsRes.value : []
   const mcpConfig = mcpRes.status === 'fulfilled' ? mcpRes.value : null
   const backups = backupsRes.status === 'fulfilled' ? backupsRes.value : []
+  const channels = channelsRes.status === 'fulfilled' ? (channelsRes.value || []) : []
   let statusSummary = null
   if (shouldLoadStatusSummary) {
     try {
@@ -206,7 +209,7 @@ async function _loadDashboardDataInner(page, fullRefresh) {
   }
 
   renderStatCards(page, services, version, agents, config, panelConfig)
-  renderOverview(page, services, mcpConfig, backups, config, agents, statusSummary)
+  renderOverview(page, services, mcpConfig, backups, config, agents, statusSummary, channels)
 
   // 第三波：日志（最低优先级）
   const logs = await logsP
@@ -310,7 +313,7 @@ function renderStatCards(page, services, version, agents, config, panelConfig) {
   `
 }
 
-function renderOverview(page, services, mcpConfig, backups, config, agents, statusSummary) {
+function renderOverview(page, services, mcpConfig, backups, config, agents, statusSummary, channels) {
   const containerEl = page.querySelector('#dashboard-overview-container')
   const gw = services.find(s => s.label === 'ai.openclaw.gateway')
   const foreignGateway = isForeignGatewayService(gw)
@@ -414,6 +417,8 @@ function renderOverview(page, services, mcpConfig, backups, config, agents, stat
           </div>
         </div>
       </div>
+      ${renderWsStatus()}
+      ${renderChannelsOverview(channels)}
       ${renderSessionStatus(sessions)}
     </div>
   `
@@ -459,6 +464,82 @@ function renderSessionStatus(sessions) {
     </div>`
 }
 
+function renderWsStatus() {
+  const connected = wsClient.connected
+  const ready = wsClient.gatewayReady
+  const reconnecting = wsClient.reconnectState === 'attempting' || wsClient.reconnectState === 'scheduled'
+  const attempts = wsClient.reconnectAttempts
+  const serverVer = wsClient.serverVersion
+
+  let statusColor, statusLabel, statusDetail
+  if (ready) {
+    statusColor = 'var(--success)'
+    statusLabel = t('dashboard.wsConnected')
+    statusDetail = serverVer ? `Gateway ${serverVer}` : ''
+  } else if (connected) {
+    statusColor = 'var(--warning)'
+    statusLabel = t('dashboard.wsHandshaking')
+    statusDetail = ''
+  } else if (reconnecting) {
+    statusColor = 'var(--warning)'
+    statusLabel = t('dashboard.wsReconnecting')
+    statusDetail = `#${attempts}`
+  } else {
+    statusColor = 'var(--text-tertiary)'
+    statusLabel = t('dashboard.wsDisconnected')
+    statusDetail = ''
+  }
+
+  return `
+    <div class="config-section" style="margin-top:16px">
+      <div class="config-section-title" style="display:flex;align-items:center;gap:8px">
+        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${statusColor}"></span>
+        WebSocket ${statusLabel}
+        ${statusDetail ? `<span style="font-weight:normal;color:var(--text-tertiary);font-size:var(--font-size-xs)">${escapeHtml(statusDetail)}</span>` : ''}
+      </div>
+    </div>`
+}
+
+const CHANNEL_ICONS = { qqbot: '🐧', qq: '🐧', feishu: '🪶', dingtalk: '📌', telegram: '✈️', discord: '🎮', slack: '💬', weixin: '💚', wechat: '💚', webchat: '🌐', whatsapp: '📱', line: '🟢', teams: '👥', matrix: '🔗' }
+
+function renderChannelsOverview(channels) {
+  if (!channels || channels.length === 0) return ''
+  const items = channels.map(ch => {
+    const icon = CHANNEL_ICONS[ch.platform] || '📡'
+    const enabled = ch.enabled !== false
+    const dot = enabled ? 'var(--success)' : 'var(--text-tertiary)'
+    const name = ch.name || ch.platform || ch.id || ''
+    return `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;background:var(--bg-secondary);font-size:var(--font-size-xs);white-space:nowrap">
+      <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${dot}"></span>
+      ${icon} ${escapeHtml(name)}
+    </span>`
+  })
+  return `
+    <div class="config-section" style="margin-top:12px">
+      <div class="config-section-title">${t('dashboard.connectedChannels')} <span style="font-weight:normal;color:var(--text-tertiary);font-size:var(--font-size-xs)">${channels.length}</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">${items.join('')}</div>
+    </div>`
+}
+
+function parseLogLine(line) {
+  // 常见日志格式: [2024-01-15 14:30:25] [INFO] message 或 2024-01-15T14:30:25 INFO message
+  const m = line.match(/^[\[（]?(\d{4}[-/]\d{2}[-/]\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?)\]?\s*[\[（]?\s*(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL|TRACE)\s*[\]）]?\s*(.*)$/i)
+  if (m) return { time: m[1].replace('T', ' ').replace(/\.\d+$/, ''), level: m[2].toUpperCase().replace('WARNING', 'WARN'), msg: m[3] }
+  // 简单 level 前缀: INFO: xxx / [ERROR] xxx
+  const m2 = line.match(/^[\[（]?\s*(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL|TRACE)\s*[\]）:]\s*(.*)$/i)
+  if (m2) return { time: '', level: m2[1].toUpperCase().replace('WARNING', 'WARN'), msg: m2[2] }
+  return { time: '', level: '', msg: line }
+}
+
+const LOG_LEVEL_STYLE = {
+  ERROR: 'background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.2)',
+  FATAL: 'background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.2)',
+  WARN: 'background:rgba(234,179,8,0.12);color:#ca8a04;border:1px solid rgba(234,179,8,0.2)',
+  INFO: 'background:rgba(59,130,246,0.10);color:#3b82f6;border:1px solid rgba(59,130,246,0.15)',
+  DEBUG: 'background:rgba(148,163,184,0.10);color:#94a3b8;border:1px solid rgba(148,163,184,0.15)',
+  TRACE: 'background:rgba(148,163,184,0.08);color:#94a3b8;border:1px solid rgba(148,163,184,0.1)',
+}
+
 function renderLogs(page, logs) {
   const logsEl = page.querySelector('#recent-logs')
   if (!logs) {
@@ -466,7 +547,13 @@ function renderLogs(page, logs) {
     return
   }
   const lines = logs.trim().split('\n')
-  logsEl.innerHTML = lines.map(l => `<div class="log-line">${escapeHtml(l)}</div>`).join('')
+  logsEl.innerHTML = lines.map(l => {
+    const parsed = parseLogLine(l)
+    if (!parsed.level) return `<div class="log-line">${escapeHtml(l)}</div>`
+    const badge = `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;letter-spacing:0.5px;${LOG_LEVEL_STYLE[parsed.level] || ''}">${parsed.level}</span>`
+    const time = parsed.time ? `<span style="color:var(--text-tertiary);font-size:11px;opacity:0.7;margin-right:4px">${escapeHtml(parsed.time)}</span>` : ''
+    return `<div class="log-line" style="display:flex;align-items:center;gap:6px">${time}${badge}<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${escapeHtml(parsed.msg)}</span></div>`
+  }).join('')
   logsEl.scrollTop = logsEl.scrollHeight
 }
 

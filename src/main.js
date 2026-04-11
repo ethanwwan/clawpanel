@@ -2,8 +2,8 @@
  * ClawPanel 入口
  */
 
-// 模块已加载，取消 splash 超时回退（防止假阳性的 "页面加载失败" 提示）
-if (window._splashTimer) { clearTimeout(window._splashTimer); window._splashTimer = null }
+// 标记 JS 模块已加载（供 index.html 多阶段启动检测使用）
+window._jsLoaded = true
 
 import { registerRoute, initRouter, navigate, setDefaultRoute } from './router.js'
 import { renderSidebar, openMobileSidebar } from './components/sidebar.js'
@@ -15,7 +15,9 @@ import { version as APP_VERSION } from '../package.json'
 import { statusIcon } from './lib/icons.js'
 import { isForeignGatewayError, showGatewayConflictGuidance } from './lib/gateway-ownership.js'
 import { tryShowEngagement } from './components/engagement.js'
+import { toast } from './components/toast.js'
 import { initI18n, t } from './lib/i18n.js'
+import { initFeatureGates } from './lib/feature-gates.js'
 
 // 样式
 import './style/variables.css'
@@ -319,6 +321,7 @@ async function boot() {
   registerRoute('/agent-detail', () => import('./pages/agent-detail.js'))
   registerRoute('/gateway', () => import('./pages/gateway.js'))
   registerRoute('/memory', () => import('./pages/memory.js'))
+  registerRoute('/dreaming', () => import('./pages/dreaming.js'))
   registerRoute('/skills', () => import('./pages/skills.js'))
   registerRoute('/security', () => import('./pages/security.js'))
   registerRoute('/about', () => import('./pages/about.js'))
@@ -329,6 +332,9 @@ async function boot() {
   registerRoute('/usage', () => import('./pages/usage.js'))
   registerRoute('/communication', () => import('./pages/communication.js'))
   registerRoute('/settings', () => import('./pages/settings.js'))
+  registerRoute('/route-map', () => import('./pages/route-map.js'))
+  registerRoute('/plugin-hub', () => import('./pages/plugin-hub.js'))
+  registerRoute('/diagnose', () => import('./pages/chat-debug.js'))
 
   renderSidebar(sidebar)
   initRouter(content)
@@ -380,8 +386,8 @@ async function boot() {
       }).catch(() => {})
     : Promise.resolve()
 
-  ensureWebSession.then(() => loadActiveInstance()).then(() => detectOpenclawStatus()).then(() => {
-    // 重新渲染侧边栏（检测完成后 isOpenclawReady 状态已更新）
+  ensureWebSession.then(() => loadActiveInstance()).then(() => detectOpenclawStatus()).then(() => initFeatureGates().catch(() => {})).then(() => {
+    // 重新渲染侧边栏（检测完成后 isOpenclawReady + 功能门控状态已更新）
     renderSidebar(sidebar)
     if (!isOpenclawReady()) {
       setDefaultRoute('/setup')
@@ -412,6 +418,10 @@ async function boot() {
         import('@tauri-apps/api/event').then(async ({ listen }) => {
           await listen('guardian-event', (e) => {
             if (e.payload?.kind === 'give_up') showGuardianRecovery()
+            else if (e.payload?.kind === 'auto_fix_start') toast(t('dashboard.fixing'), 'info')
+            else if (e.payload?.kind === 'auto_fix_retry') toast(t('dashboard.fixDoneRestarting'), 'info')
+            else if (e.payload?.kind === 'auto_fix_success') toast(t('dashboard.fixDoneRestarted'), 'success')
+            else if (e.payload?.kind === 'auto_fix_failure') toast(String(e.payload?.message || t('dashboard.fixDoneRestartFail')).slice(0, 240), 'error')
           })
         }).catch(() => {})
         api.guardianStatus().then(status => {
@@ -465,6 +475,8 @@ async function autoConnectWebSocket() {
     const port = config?.gateway?.port || 18789
     const rawToken = config?.gateway?.auth?.token
     const token = (typeof rawToken === 'string') ? rawToken : ''
+    const rawPassword = config?.gateway?.auth?.password
+    const password = (typeof rawPassword === 'string') ? rawPassword : ''
 
     // 启动前先确保设备已配对 + allowedOrigins 已写入，无需用户手动操作
     let needReload = false
@@ -502,6 +514,23 @@ async function autoConnectWebSocket() {
       }
     }
 
+    // TCP 端口就绪探测：等待 Gateway 端口可达后再发起 WS 连接（仅 Tauri 桌面端）
+    if (isTauriRuntime()) {
+      const probeStart = Date.now()
+      const probeTimeout = 20000
+      let portReady = false
+      while (Date.now() - probeStart < probeTimeout) {
+        try {
+          portReady = await api.probeGatewayPort()
+          if (portReady) break
+        } catch {}
+        await new Promise(r => setTimeout(r, 2000))
+      }
+      if (!portReady) {
+        console.warn(`[main] Gateway 端口 ${port} 在 ${probeTimeout / 1000}s 内未就绪，仍尝试连接`)
+      }
+    }
+
     let host
     const inst2 = getActiveInstance()
     if (inst2.type !== 'local' && inst2.endpoint) {
@@ -514,8 +543,8 @@ async function autoConnectWebSocket() {
     } else {
       host = isTauriRuntime() ? `127.0.0.1:${port}` : location.host
     }
-    wsClient.connect(host, token)
-    console.log(`[main] WebSocket 连接已启动 -> ${host}`)
+    wsClient.connect(host, token, { password })
+    console.log(`[main] WebSocket 连接已启动 -> ${host}${password ? ' (password mode)' : ''}`)
   } catch (e) {
     console.error('[main] 自动连接 WebSocket 失败:', e)
   }
@@ -789,7 +818,9 @@ function startUpdateChecker() {
   if (!auth.ok) await showLoginOverlay(auth.defaultPw)
   try {
     await boot()
+    window._bootDone = true
   } catch (bootErr) {
+    window._bootDone = true
     console.error('[main] boot() 失败:', bootErr)
     _hideSplash()
     const app = document.getElementById('app')

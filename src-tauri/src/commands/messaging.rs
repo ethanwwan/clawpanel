@@ -2099,6 +2099,166 @@ pub async fn get_channel_plugin_status(plugin_id: String) -> Result<Value, Strin
     }))
 }
 
+#[tauri::command]
+pub async fn list_all_plugins() -> Result<Value, String> {
+    let cfg = super::config::load_openclaw_json().unwrap_or_else(|_| json!({}));
+    let entries = cfg
+        .pointer("/plugins/entries")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    let allow_arr = cfg
+        .pointer("/plugins/allow")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let ext_dir = super::openclaw_dir().join("extensions");
+    let mut plugins: Vec<Value> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Scan extensions directory
+    if ext_dir.is_dir() {
+        if let Ok(rd) = std::fs::read_dir(&ext_dir) {
+            for entry in rd.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') {
+                    continue;
+                }
+                let p = entry.path();
+                if !p.is_dir() {
+                    continue;
+                }
+                let has_marker = p.join("package.json").is_file()
+                    || p.join("plugin.ts").is_file()
+                    || p.join("index.js").is_file();
+                if !has_marker {
+                    continue;
+                }
+
+                let plugin_id = name.clone();
+                seen.insert(plugin_id.clone());
+
+                let entry_cfg = entries.get(&plugin_id);
+                let enabled = entry_cfg
+                    .and_then(|e| e.get("enabled"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let allowed = allow_arr.iter().any(|v| v.as_str() == Some(&plugin_id));
+                let builtin = is_plugin_builtin(&plugin_id);
+
+                // Try to read version from package.json
+                let version = std::fs::read_to_string(p.join("package.json"))
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                    .and_then(|v| v.get("version").and_then(|v| v.as_str().map(String::from)));
+
+                let description = std::fs::read_to_string(p.join("package.json"))
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                    .and_then(|v| {
+                        v.get("description")
+                            .and_then(|v| v.as_str().map(String::from))
+                    });
+
+                plugins.push(json!({
+                    "id": plugin_id,
+                    "installed": true,
+                    "builtin": builtin,
+                    "enabled": enabled,
+                    "allowed": allowed,
+                    "version": version,
+                    "description": description,
+                    "config": entry_cfg.and_then(|e| e.get("config")),
+                }));
+            }
+        }
+    }
+
+    // Also include entries from config that might not be in extensions dir (built-in)
+    for (pid, entry_val) in &entries {
+        if seen.contains(pid.as_str()) {
+            continue;
+        }
+        seen.insert(pid.clone());
+        let enabled = entry_val
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let allowed = allow_arr.iter().any(|v| v.as_str() == Some(pid.as_str()));
+        let builtin = is_plugin_builtin(pid);
+        plugins.push(json!({
+            "id": pid,
+            "installed": builtin,
+            "builtin": builtin,
+            "enabled": enabled,
+            "allowed": allowed,
+            "version": null,
+            "description": null,
+            "config": entry_val.get("config"),
+        }));
+    }
+
+    plugins.sort_by(|a, b| {
+        let ae = a.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+        let be = b.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+        be.cmp(&ae).then_with(|| {
+            let an = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let bn = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            an.cmp(bn)
+        })
+    });
+
+    Ok(json!({ "plugins": plugins }))
+}
+
+#[tauri::command]
+pub async fn toggle_plugin(plugin_id: String, enabled: bool) -> Result<Value, String> {
+    let plugin_id = plugin_id.trim();
+    if plugin_id.is_empty() {
+        return Err("plugin_id 不能为空".into());
+    }
+
+    let config_path = super::openclaw_dir().join("openclaw.json");
+    let mut cfg = super::config::load_openclaw_json().unwrap_or_else(|_| json!({}));
+
+    if enabled {
+        ensure_plugin_allowed(&mut cfg, plugin_id)?;
+    } else {
+        disable_legacy_plugin(&mut cfg, plugin_id);
+    }
+
+    let content = serde_json::to_string_pretty(&cfg).map_err(|e| format!("序列化失败: {e}"))?;
+    std::fs::write(&config_path, content).map_err(|e| format!("写入配置失败: {e}"))?;
+
+    Ok(json!({ "ok": true, "enabled": enabled, "pluginId": plugin_id }))
+}
+
+#[tauri::command]
+pub async fn install_plugin(package_name: String) -> Result<Value, String> {
+    let package_name = package_name.trim().to_string();
+    if package_name.is_empty() {
+        return Err("包名不能为空".into());
+    }
+
+    let cli = crate::utils::resolve_openclaw_cli_path()
+        .ok_or_else(|| "找不到 OpenClaw CLI，请先安装".to_string())?;
+    let output = std::process::Command::new(&cli)
+        .args(["plugins", "install", &package_name])
+        .current_dir(dirs::home_dir().unwrap_or_default())
+        .output()
+        .map_err(|e| format!("执行 openclaw plugins install 失败: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if !output.status.success() {
+        return Err(format!("安装失败: {}{}", stdout, stderr));
+    }
+
+    Ok(json!({ "ok": true, "output": format!("{}{}", stdout, stderr).trim().to_string() }))
+}
+
 // ── Slack / Matrix / Discord 凭证校验 ─────────────────────
 
 async fn verify_slack(
@@ -3127,9 +3287,11 @@ pub async fn install_qqbot_plugin(
                 "plugin-log",
                 "QQ 插件安装完成；正在重启 Gateway 以加载插件（与官方文档一致）",
             );
+            let app2 = app.clone();
             tauri::async_runtime::spawn(async move {
                 let _ =
-                    crate::commands::service::restart_service("ai.openclaw.gateway".into()).await;
+                    crate::commands::service::restart_service(app2, "ai.openclaw.gateway".into())
+                        .await;
             });
             Ok("安装成功".into())
         }

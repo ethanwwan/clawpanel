@@ -5,6 +5,18 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.12.0] - 2026-04-11
+
+### 新功能 (Features)
+
+- **OpenClaw 4.9 全面适配** — 完成上游 OpenClaw `2026.4.9` 全量兼容性审查（180+ 文件 diff），涵盖 Gateway RPC、Agent 配置 schema、渠道插件基础设施、Setup wizard、所有消息渠道（LINE/Matrix/Slack/Teams/Telegram 等），确认完全兼容
+
+### 改进 (Improvements)
+
+- **推荐内核统一升级** — `openclaw-version-policy.json` 全版本（0.9.0 ~ 0.12.0）推荐内核统一升级至 `2026.4.9`（官方版）/ `2026.4.9-zh.2`（汉化版），不再保留旧版 3.13 / 3.28 映射
+- **安装流程稳健性提升** — 旧版本清理（npm uninstall）增加 30 秒超时保护，清理失败不阻断安装成功报告；Windows 进程检测从废弃的 wmic 迁移到 PowerShell Get-Process / Get-CimInstance，兼容 Windows 11
+- **Standalone 安装包适配** — 兼容 CI 新版 edition 格式 `latest.json`（`editions.zh.version`），修正文件名前缀（`openclaw-zh-`）和 R2 下载路径（`/zh/{version}/`），同时保持旧 flat 格式向后兼容
+
 ## [0.11.6] - 2026-04-07
 
 ### 新功能 (Features)

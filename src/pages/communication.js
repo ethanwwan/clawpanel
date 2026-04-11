@@ -6,6 +6,7 @@ import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
 import { icon } from '../lib/icons.js'
 import { t } from '../lib/i18n.js'
+import { wsClient } from '../lib/ws-client.js'
 
 let _page = null, _config = null, _dirty = false
 
@@ -369,10 +370,74 @@ function renderApprovals(el) {
       </div>
       ${toggleRow('approvals-forwardExec', t('communication.approvalsForwardExec'), t('communication.approvalsForwardExecHint'), !!a.enabled)}
     </div>
+    <div class="config-section" style="margin-top:var(--space-lg)">
+      <div class="config-section-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>${t('communication.pendingApprovals')}</span>
+        <button class="btn btn-sm btn-secondary" id="btn-refresh-approvals">${t('communication.refreshApprovals')}</button>
+      </div>
+      <div id="approval-queue" style="margin-top:var(--space-sm)">
+        <div class="form-hint">${t('communication.approvalsLoadingQueue')}</div>
+      </div>
+    </div>
   `
   el.querySelectorAll('input, select').forEach(inp => {
     inp.addEventListener('change', markDirty)
   })
+  el.querySelector('#btn-refresh-approvals')?.addEventListener('click', () => loadApprovalQueue(el))
+  loadApprovalQueue(el)
+}
+
+async function loadApprovalQueue(el) {
+  const container = (el || _page)?.querySelector('#approval-queue')
+  if (!container) return
+  if (!wsClient.connected || !wsClient.gatewayReady) {
+    container.innerHTML = `<div class="form-hint">${esc(t('communication.approvalsGwNotReady'))}</div>`
+    return
+  }
+  container.innerHTML = `<div class="form-hint">${esc(t('communication.approvalsLoadingQueue'))}</div>`
+  let execItems = [], pluginItems = [], unsupported = false
+  try {
+    const [execRes, pluginRes] = await Promise.allSettled([
+      wsClient.execApprovalList(),
+      wsClient.pluginApprovalList(),
+    ])
+    if (execRes.status === 'fulfilled') execItems = execRes.value?.approvals || execRes.value?.items || []
+    else {
+      const msg = String(execRes.reason?.message || '').toLowerCase()
+      if (msg.includes('unknown method') || msg.includes('not found')) unsupported = true
+    }
+    if (pluginRes.status === 'fulfilled') pluginItems = pluginRes.value?.approvals || pluginRes.value?.items || []
+  } catch {}
+
+  if (unsupported) {
+    container.innerHTML = `<div class="form-hint" style="color:var(--text-tertiary)">${esc(t('communication.approvalsUnsupported'))}</div>`
+    return
+  }
+
+  const allItems = [
+    ...execItems.map(i => ({ ...i, _type: 'exec' })),
+    ...pluginItems.map(i => ({ ...i, _type: 'plugin' })),
+  ]
+
+  if (!allItems.length) {
+    container.innerHTML = `<div class="form-hint">${esc(t('communication.approvalsQueueEmpty'))}</div>`
+    return
+  }
+
+  container.innerHTML = allItems.map(item => {
+    const id = item.id || item.approvalId || ''
+    const type = item._type === 'plugin' ? 'Plugin' : 'Exec'
+    const cmd = item.command || item.description || item.name || id
+    const status = item.status || 'pending'
+    const ts = item.createdAt || item.timestamp || 0
+    const timeStr = ts ? new Date(typeof ts === 'number' && ts < 1e12 ? ts * 1000 : ts).toLocaleString() : ''
+    return `<div style="padding:10px 0;border-bottom:1px solid var(--border-primary);display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <div style="min-width:0;flex:1">
+        <div style="font-size:13px"><span class="badge" style="font-size:11px;margin-right:4px">${esc(type)}</span>${esc(cmd)}</div>
+        <div style="font-size:12px;color:var(--text-tertiary);margin-top:2px">${esc(status)}${timeStr ? ' · ' + timeStr : ''}</div>
+      </div>
+    </div>`
+  }).join('')
 }
 
 function collectApprovals() {

@@ -16,7 +16,8 @@ pub async fn skills_list(agent_id: Option<String>) -> Result<Value, String> {
 #[tauri::command]
 pub async fn skills_info(name: String, agent_id: Option<String>) -> Result<Value, String> {
     let agent_ws = resolve_agent_skills_dir(agent_id.as_deref());
-    scan_custom_skill_detail(&name, agent_ws.as_deref()).ok_or_else(|| format!("Skill「{name}」不存在"))
+    scan_custom_skill_detail(&name, agent_ws.as_deref())
+        .ok_or_else(|| format!("Skill「{name}」不存在"))
 }
 
 /// 检查 Skills 依赖状态（纯本地扫描）
@@ -150,8 +151,8 @@ pub async fn skills_uninstall(name: String, agent_id: Option<String>) -> Result<
         return Err("无效的 Skill 名称".to_string());
     }
     let agent_ws = resolve_agent_skills_dir(agent_id.as_deref());
-    let skills_dir =
-        resolve_custom_skill_dir_with_agent(&name, agent_ws.as_deref()).ok_or_else(|| format!("Skill「{name}」不存在"))?;
+    let skills_dir = resolve_custom_skill_dir_with_agent(&name, agent_ws.as_deref())
+        .ok_or_else(|| format!("Skill「{name}」不存在"))?;
     if !skills_dir.exists() {
         return Err(format!("Skill「{name}」不存在"));
     }
@@ -166,8 +167,8 @@ pub async fn skills_validate(name: String) -> Result<Value, String> {
         return Err("无效的 Skill 名称".to_string());
     }
 
-    let skill_dir =
-        resolve_custom_skill_dir_with_agent(&name, None).ok_or_else(|| format!("Skill「{name}」不存在"))?;
+    let skill_dir = resolve_custom_skill_dir_with_agent(&name, None)
+        .ok_or_else(|| format!("Skill「{name}」不存在"))?;
     if !skill_dir.exists() {
         return Err(format!("Skill「{name}」不存在"));
     }
@@ -457,7 +458,9 @@ fn clean_cli_output(text: &str) -> String {
 /// 根据 agentId 解析该 Agent 的 workspace/skills 目录
 /// 如果 agentId 为 None 或 "main"，返回 None（使用默认的 ~/.openclaw/skills）
 fn resolve_agent_skills_dir(agent_id: Option<&str>) -> Option<std::path::PathBuf> {
-    let id = agent_id.map(|s| s.trim()).filter(|s| !s.is_empty() && *s != "main")?;
+    let id = agent_id
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && *s != "main")?;
     // 读取 openclaw.json 获取 agent workspace
     let config = super::config::load_openclaw_json().ok()?;
     let workspace = config
@@ -485,7 +488,9 @@ fn resolve_agent_skills_dir(agent_id: Option<&str>) -> Option<std::path::PathBuf
     Some(expanded.join("skills"))
 }
 
-fn custom_skill_roots_for_agent(agent_skills_dir: Option<&std::path::Path>) -> Vec<(std::path::PathBuf, &'static str)> {
+fn custom_skill_roots_for_agent(
+    agent_skills_dir: Option<&std::path::Path>,
+) -> Vec<(std::path::PathBuf, &'static str)> {
     let mut roots = Vec::new();
 
     // 如果指定了 agent 的 skills 目录，优先放在第一位
@@ -532,14 +537,20 @@ fn custom_skill_roots_for_agent(agent_skills_dir: Option<&std::path::Path>) -> V
     roots
 }
 
-fn resolve_custom_skill_dir_with_agent(name: &str, agent_skills_dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+fn resolve_custom_skill_dir_with_agent(
+    name: &str,
+    agent_skills_dir: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
     custom_skill_roots_for_agent(agent_skills_dir)
         .into_iter()
         .map(|(root, _)| root.join(name))
         .find(|path| path.exists())
 }
 
-fn scan_custom_skill_detail(name: &str, agent_skills_dir: Option<&std::path::Path>) -> Option<Value> {
+fn scan_custom_skill_detail(
+    name: &str,
+    agent_skills_dir: Option<&std::path::Path>,
+) -> Option<Value> {
     for (root, source_label) in custom_skill_roots_for_agent(agent_skills_dir) {
         let skill_path = root.join(name);
         if !skill_path.exists() {
@@ -593,7 +604,9 @@ fn scan_custom_skill_detail(name: &str, agent_skills_dir: Option<&std::path::Pat
     None
 }
 
-fn scan_local_skill_entries_for_agent(agent_skills_dir: Option<&std::path::Path>) -> Result<Vec<Value>, String> {
+fn scan_local_skill_entries_for_agent(
+    agent_skills_dir: Option<&std::path::Path>,
+) -> Result<Vec<Value>, String> {
     let mut skills = Vec::new();
 
     for (skills_dir, source_label) in custom_skill_roots_for_agent(agent_skills_dir) {
@@ -663,7 +676,10 @@ fn scan_local_skill_entries() -> Result<Vec<Value>, String> {
 }
 
 /// CLI 不可用或当前结果不可用时的兜底：扫描本地自定义 Skills 目录
-fn scan_local_skills(cli_diagnostic: Option<Value>, agent_skills_dir: Option<&std::path::Path>) -> Result<Value, String> {
+fn scan_local_skills(
+    cli_diagnostic: Option<Value>,
+    agent_skills_dir: Option<&std::path::Path>,
+) -> Result<Value, String> {
     let roots = custom_skill_roots_for_agent(agent_skills_dir);
     let scanned_roots: Vec<String> = roots
         .iter()

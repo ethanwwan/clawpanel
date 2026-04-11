@@ -5,6 +5,7 @@
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
 import { t } from '../lib/i18n.js'
+import { wsClient } from '../lib/ws-client.js'
 
 let _loadSeq = 0
 let _selectedAgentId = null // null = default (main)
@@ -243,7 +244,12 @@ async function handleInfo(page, name) {
   detail.innerHTML = `<div class="form-hint" style="margin-top:var(--space-md)">${t('skills.loadingDetail')}</div>`
   detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   try {
-    const skill = await api.skillsInfo(name, _selectedAgentId)
+    let skill = null
+    // 优先 Gateway RPC（可获取 ClawHub 远程详情），回退 Tauri 本地
+    if (wsClient.connected && wsClient.gatewayReady) {
+      try { skill = await wsClient.skillsDetail(name) } catch {}
+    }
+    if (!skill) skill = await api.skillsInfo(name, _selectedAgentId)
     const s = skill || {}
     const reqs = s.requirements || {}
     const miss = s.missing || {}
@@ -368,10 +374,20 @@ async function handleStoreSearch(page) {
     renderStoreItems(results, filtered)
     return
   }
-  // 没有索引时走服务端搜索
+  // 没有索引时走服务端搜索（优先 Gateway RPC，回退 Tauri）
   results.innerHTML = `<div class="form-hint" style="padding:var(--space-sm)">${t('skills.searching')}</div>`
   try {
-    const items = await api.skillhubSearch(input.value.trim())
+    let items
+    if (wsClient.connected && wsClient.gatewayReady) {
+      try {
+        const res = await wsClient.skillsSearch(input.value.trim(), 30)
+        items = res?.results || []
+      } catch {
+        items = await api.skillhubSearch(input.value.trim())
+      }
+    } else {
+      items = await api.skillhubSearch(input.value.trim())
+    }
     renderStoreItems(results, items)
   } catch (e) {
     results.innerHTML = `<div style="color:var(--error);padding:var(--space-sm)">${t('skills.searchFailed')}: ${esc(e?.message || e)}</div>`

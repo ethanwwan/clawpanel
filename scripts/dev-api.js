@@ -674,15 +674,21 @@ async function _tryStandaloneInstall(version, logs, overrideBaseUrl = null) {
   if (!resp.ok) throw new Error(`standalone 清单不可用 (HTTP ${resp.status})`)
   const manifest = await resp.json()
 
-  const remoteVersion = manifest.version
+  // 兼容两种 latest.json 格式：
+  // 新格式（CI 生成）: { "editions": { "zh": { "version": "...", "base_url": "..." } } }
+  // 旧格式（兼容）:   { "version": "...", "base_url": "..." }
+  const editionObj = manifest?.editions?.zh
+  const remoteVersion = editionObj?.version || manifest.version
   if (!remoteVersion) throw new Error('standalone 清单缺少 version 字段')
   if (version !== 'latest' && !versionsMatch(remoteVersion, version)) {
     throw new Error(`standalone 版本 ${remoteVersion} 与请求版本 ${version} 不匹配`)
   }
 
-  const remoteBase = overrideBaseUrl || manifest.base_url || `${cfg.baseUrl}/${remoteVersion}`
+  const archivePrefix = editionObj ? 'openclaw-zh' : 'openclaw'
+  const manifestBaseUrl = editionObj?.base_url || manifest.base_url
+  const remoteBase = overrideBaseUrl || manifestBaseUrl || `${cfg.baseUrl}/${remoteVersion}`
   const ext = isWindows ? 'zip' : 'tar.gz'
-  const filename = `openclaw-${remoteVersion}-${platform}.${ext}`
+  const filename = `${archivePrefix}-${remoteVersion}-${platform}.${ext}`
   const downloadUrl = `${remoteBase}/${filename}`
 
   logs.push(`从 CDN 下载: ${filename}`)
@@ -1097,7 +1103,7 @@ function scanLocalSkillsFallback(agentSkillsDir = null) {
       status: 'scanned',
       scannedAt: new Date().toISOString(),
       scannedRoots,
-      cli: cliError ? { status: 'exec-failed', message: String(cliError?.message || cliError) } : null,
+      cli: null,
     },
   }
 }
@@ -3435,6 +3441,79 @@ const handlers = {
     }
   },
 
+  list_all_plugins() {
+    const cfg = readOpenclawConfigOptional()
+    const entries = cfg.plugins?.entries || {}
+    const allowArr = cfg.plugins?.allow || []
+    const extDir = path.join(OPENCLAW_DIR, 'extensions')
+    const plugins = []
+    const seen = new Set()
+
+    // Scan extensions directory
+    if (fs.existsSync(extDir)) {
+      for (const name of fs.readdirSync(extDir)) {
+        if (name.startsWith('.')) continue
+        const p = path.join(extDir, name)
+        if (!fs.statSync(p).isDirectory()) continue
+        const hasMarker = fs.existsSync(path.join(p, 'package.json')) || fs.existsSync(path.join(p, 'plugin.ts')) || fs.existsSync(path.join(p, 'index.js'))
+        if (!hasMarker) continue
+        seen.add(name)
+        const entryCfg = entries[name]
+        const enabled = !!entryCfg?.enabled
+        const allowed = allowArr.includes(name)
+        let version = null, description = null
+        try {
+          const pkg = JSON.parse(fs.readFileSync(path.join(p, 'package.json'), 'utf8'))
+          version = pkg.version || null
+          description = pkg.description || null
+        } catch {}
+        plugins.push({ id: name, installed: true, builtin: false, enabled, allowed, version, description, config: entryCfg?.config || null })
+      }
+    }
+
+    // Include entries from config not found in extensions dir
+    for (const [pid, val] of Object.entries(entries)) {
+      if (seen.has(pid)) continue
+      seen.add(pid)
+      plugins.push({ id: pid, installed: false, builtin: false, enabled: !!val?.enabled, allowed: allowArr.includes(pid), version: null, description: null, config: val?.config || null })
+    }
+
+    plugins.sort((a, b) => (b.enabled ? 1 : 0) - (a.enabled ? 1 : 0) || a.id.localeCompare(b.id))
+    return { plugins }
+  },
+
+  toggle_plugin({ pluginId, enabled }) {
+    if (!pluginId || !pluginId.trim()) throw new Error('pluginId 不能为空')
+    const pid = pluginId.trim()
+    const cfg = readOpenclawConfigOptional()
+    if (!cfg.plugins) cfg.plugins = {}
+    if (!cfg.plugins.entries) cfg.plugins.entries = {}
+    if (!cfg.plugins.allow) cfg.plugins.allow = []
+
+    if (enabled) {
+      if (!cfg.plugins.allow.includes(pid)) cfg.plugins.allow.push(pid)
+      if (!cfg.plugins.entries[pid]) cfg.plugins.entries[pid] = {}
+      cfg.plugins.entries[pid].enabled = true
+    } else {
+      cfg.plugins.allow = cfg.plugins.allow.filter(v => v !== pid)
+      if (cfg.plugins.entries[pid]) cfg.plugins.entries[pid].enabled = false
+    }
+
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8')
+    return { ok: true, enabled, pluginId: pid }
+  },
+
+  install_plugin({ packageName }) {
+    if (!packageName || !packageName.trim()) throw new Error('包名不能为空')
+    const spec = packageName.trim()
+    try {
+      execOpenclawSync(['plugins', 'install', spec], { timeout: 120000, cwd: homedir(), windowsHide: true }, `插件 ${spec} 安装失败`)
+      return { ok: true, output: '安装成功' }
+    } catch (e) {
+      throw new Error(`插件安装失败: ${e.message || e}`)
+    }
+  },
+
   get_channel_plugin_status({ pluginId }) {
     if (!pluginId || !pluginId.trim()) throw new Error('pluginId 不能为空')
     const pid = pluginId.trim()
@@ -4542,6 +4621,129 @@ const handlers = {
     }
   },
 
+  async probe_gateway_port() {
+    const port = readGatewayPort()
+    return new Promise(resolve => {
+      const net = require('net')
+      const sock = net.createConnection({ host: '127.0.0.1', port, timeout: 3000 })
+      sock.on('connect', () => { sock.destroy(); resolve(true) })
+      sock.on('error', () => resolve(false))
+      sock.on('timeout', () => { sock.destroy(); resolve(false) })
+    })
+  },
+
+  async diagnose_gateway_connection() {
+    const steps = []
+    const ocDir = openclawDir()
+    const configPath = path.join(ocDir, 'openclaw.json')
+    const port = readGatewayPort()
+
+    // 1. 配置文件
+    const t1 = Date.now()
+    try {
+      const content = fs.readFileSync(configPath, 'utf-8')
+      const val = JSON.parse(content)
+      steps.push({ name: 'config', ok: !!val.gateway, message: val.gateway ? '配置文件有效，含 gateway 配置' : '配置文件缺少 gateway 段', durationMs: Date.now() - t1 })
+    } catch (e) {
+      steps.push({ name: 'config', ok: false, message: `配置文件异常: ${e.message}`, durationMs: Date.now() - t1 })
+    }
+
+    // 2. 设备密钥
+    const t2 = Date.now()
+    const keyPath = path.join(ocDir, 'clawpanel-device-key.json')
+    const keyExists = fs.existsSync(keyPath)
+    steps.push({ name: 'device_key', ok: keyExists, message: keyExists ? '设备密钥存在' : '设备密钥不存在', durationMs: Date.now() - t2 })
+
+    // 3. allowedOrigins
+    const t3 = Date.now()
+    try {
+      const val = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+      const origins = val?.gateway?.controlUi?.allowedOrigins
+      if (Array.isArray(origins) && origins.length > 0) {
+        steps.push({ name: 'allowed_origins', ok: true, message: `allowedOrigins: ${JSON.stringify(origins)}`, durationMs: Date.now() - t3 })
+      } else {
+        steps.push({ name: 'allowed_origins', ok: false, message: '未配置 allowedOrigins', durationMs: Date.now() - t3 })
+      }
+    } catch {
+      steps.push({ name: 'allowed_origins', ok: false, message: '配置文件不可读', durationMs: Date.now() - t3 })
+    }
+
+    // 4. TCP 端口
+    const t4 = Date.now()
+    const tcpOk = await new Promise(resolve => {
+      const net = require('net')
+      const sock = net.createConnection({ host: '127.0.0.1', port, timeout: 3000 })
+      sock.on('connect', () => { sock.destroy(); resolve(true) })
+      sock.on('error', () => resolve(false))
+      sock.on('timeout', () => { sock.destroy(); resolve(false) })
+    })
+    steps.push({ name: 'tcp_port', ok: tcpOk, message: tcpOk ? `端口 ${port} 可达` : `端口 ${port} 不可达`, durationMs: Date.now() - t4 })
+
+    // 5. HTTP /health
+    const t5 = Date.now()
+    let httpOk = false
+    let httpMsg = ''
+    try {
+      const resp = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(5000) })
+      httpOk = resp.ok
+      httpMsg = `HTTP /health 返回 ${resp.status}`
+    } catch (e) {
+      httpMsg = `HTTP /health 请求失败: ${e.message}`
+    }
+    steps.push({ name: 'http_health', ok: httpOk, message: httpMsg, durationMs: Date.now() - t5 })
+
+    // 6. 错误日志
+    const t6 = Date.now()
+    const errLogPath = path.join(ocDir, 'logs', 'gateway.err.log')
+    if (fs.existsSync(errLogPath)) {
+      const stat = fs.statSync(errLogPath)
+      if (stat.size === 0) {
+        steps.push({ name: 'err_log', ok: true, message: '错误日志为空（正常）', durationMs: Date.now() - t6 })
+      } else {
+        const buf = Buffer.alloc(Math.min(1024, stat.size))
+        const fd = fs.openSync(errLogPath, 'r')
+        fs.readSync(fd, buf, 0, buf.length, Math.max(0, stat.size - buf.length))
+        fs.closeSync(fd)
+        const tail = buf.toString('utf-8').toLowerCase()
+        const hasFatal = tail.includes('fatal') || tail.includes('eaddrinuse') || tail.includes('config invalid')
+        steps.push({ name: 'err_log', ok: !hasFatal, message: hasFatal ? `错误日志含关键错误 (${stat.size} bytes)` : `错误日志存在但无致命错误 (${stat.size} bytes)`, durationMs: Date.now() - t6 })
+      }
+    } else {
+      steps.push({ name: 'err_log', ok: true, message: '无错误日志（正常）', durationMs: Date.now() - t6 })
+    }
+
+    // env
+    let authMode = 'none'
+    try {
+      const val = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+      const auth = val?.gateway?.auth
+      if (auth?.token) authMode = 'token'
+      else if (auth?.password) authMode = 'password'
+    } catch {}
+    let errLogExcerpt = ''
+    try {
+      const buf = fs.readFileSync(errLogPath)
+      errLogExcerpt = buf.slice(Math.max(0, buf.length - 2048)).toString('utf-8')
+    } catch {}
+
+    const overallOk = steps.every(s => s.ok)
+    const failed = steps.filter(s => !s.ok).map(s => s.name)
+    return {
+      steps,
+      env: {
+        openclawDir: ocDir,
+        configExists: fs.existsSync(configPath),
+        port,
+        authMode,
+        deviceKeyExists: keyExists,
+        gatewayOwner: null,
+        errLogExcerpt,
+      },
+      overallOk,
+      summary: overallOk ? '所有检查项通过' : `以下检查未通过: ${failed.join(', ')}`,
+    }
+  },
+
   guardian_status() {
     // Web 模式没有 Guardian 守护进程
     return { enabled: false, giveUp: false }
@@ -5342,7 +5544,7 @@ const handlers = {
     const recommended = recommendedVersionFor(source)
     const ver = version || recommended || 'latest'
     const oldPkg = npmPackageName(currentSource)
-    const needUninstallOld = currentSource !== source
+    const needUninstallOld = currentSource !== source && oldPkg !== pkg
     const npmBin = isWindows ? 'npm.cmd' : 'npm'
     const registry = pickRegistryForPackage(pkg)
     const logs = []
@@ -5350,21 +5552,46 @@ const handlers = {
     // ── standalone 安装（auto / standalone-r2 / standalone-github） ──
     const tryStandalone = source !== 'official' && ['auto', 'standalone-r2', 'standalone-github'].includes(method)
     if (tryStandalone) {
-      try {
-        const githubBase = method === 'standalone-github'
-          ? `https://github.com/qingchencloud/openclaw-standalone/releases/download/v${ver}`
-          : null
-        const saResult = await _tryStandaloneInstall(ver, logs, githubBase)
-        if (saResult) {
-          const label = method === 'standalone-github' ? 'GitHub' : 'CDN'
-          logs.push(`✅ standalone (${label}) 安装完成`)
-          return logs.join('\n')
-        }
-      } catch (e) {
-        if (method === 'auto') {
-          logs.push(`standalone 不可用（${e.message}），降级到 npm 安装...`)
-        } else {
+      const githubReleaseBase = `https://github.com/qingchencloud/openclaw-standalone/releases/download/v${ver}`
+      if (method === 'standalone-github') {
+        // standalone-github 模式：只走 GitHub
+        try {
+          const saResult = await _tryStandaloneInstall(ver, logs, githubReleaseBase)
+          if (saResult) {
+            logs.push('✅ standalone (GitHub) 安装完成')
+            return logs.join('\n')
+          }
+        } catch (e) {
           throw new Error(`standalone 安装失败: ${e.message}`)
+        }
+      } else {
+        // auto / standalone-r2 模式：R2 CDN → GitHub Releases fallback
+        let cdnErr = null
+        try {
+          const saResult = await _tryStandaloneInstall(ver, logs, null)
+          if (saResult) {
+            logs.push('✅ standalone (CDN) 安装完成')
+            return logs.join('\n')
+          }
+        } catch (e) {
+          cdnErr = e.message
+          logs.push(`CDN 下载失败（${cdnErr}），尝试从 GitHub Releases 下载...`)
+        }
+        // Fallback: GitHub Releases
+        if (cdnErr) {
+          try {
+            const saResult = await _tryStandaloneInstall(ver, logs, githubReleaseBase)
+            if (saResult) {
+              logs.push('✅ standalone (GitHub) 安装完成')
+              return logs.join('\n')
+            }
+          } catch (e) {
+            if (method === 'auto') {
+              logs.push(`standalone 不可用（GitHub: ${e.message}），降级到 npm 安装...`)
+            } else {
+              throw new Error(`standalone 安装失败: CDN=${cdnErr}, GitHub=${e.message}`)
+            }
+          }
         }
       }
     }

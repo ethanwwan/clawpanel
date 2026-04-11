@@ -1,4 +1,3 @@
-#[cfg(not(target_os = "macos"))]
 use crate::utils::openclaw_command;
 /// 配置读写命令
 use serde::Deserialize;
@@ -485,33 +484,136 @@ fn npm_command_elevated() -> Command {
 /// 安装/升级前的清理工作：停止 Gateway、清理 npm 全局 bin 下的 openclaw 残留文件
 /// 解决 Windows 上 EEXIST（文件已存在）和文件被占用的问题
 fn pre_install_cleanup() {
-    // 1. 停止 Gateway 进程，释放 openclaw 相关文件锁
+    /// 带超时执行命令（spawn + try_wait），防止任何子进程无限阻塞
+    fn run_with_timeout(
+        mut child: std::process::Child,
+        timeout_secs: u64,
+    ) -> Option<std::process::Output> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let stdout = child
+                        .stdout
+                        .take()
+                        .map(|mut s| {
+                            let mut buf = Vec::new();
+                            let _ = std::io::Read::read_to_end(&mut s, &mut buf);
+                            buf
+                        })
+                        .unwrap_or_default();
+                    return Some(std::process::Output {
+                        status,
+                        stdout,
+                        stderr: Vec::new(),
+                    });
+                }
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
+    // 1. 先通过 CLI 正常停止 Gateway（10s 超时）
+    if let Ok(child) = openclaw_command()
+        .args(["gateway", "stop"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        run_with_timeout(child, 10);
+    }
+
+    // 2. 停止 Gateway 进程，释放 openclaw 相关文件锁
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        // 杀死所有 openclaw gateway 相关的 node 进程
-        let _ = Command::new("taskkill")
-            .args(["/f", "/im", "node.exe", "/fi", "WINDOWTITLE eq OpenClaw*"])
-            .creation_flags(0x08000000)
-            .output();
-        // 等文件锁释放
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        // 杀死所有运行 openclaw gateway 的 node.exe 进程（通过命令行匹配）
+        // 使用 PowerShell Get-CimInstance（兼容 Windows 11，wmic 已废弃）（10s 超时）
+        if let Ok(child) = Command::new("powershell")
+            .args(["-NoProfile", "-Command",
+                "Get-CimInstance Win32_Process -Filter \"CommandLine like '%openclaw%gateway%'\" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ProcessId"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            if let Some(output) = run_with_timeout(child, 10) {
+                let text = String::from_utf8_lossy(&output.stdout);
+                for line in text.lines() {
+                    if let Ok(_pid) = line.trim().parse::<u32>() {
+                        let _ = Command::new("taskkill").args(["/F", "/PID", line.trim()]).output();
+                    }
+                }
+            }
+        }
+
+        // 同时杀死 standalone 目录下的 node.exe 进程（每个目录 10s 超时）
+        for sa_dir in all_standalone_dirs() {
+            if sa_dir.exists() {
+                let dir_lower = sa_dir
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .replace('\\', "\\\\");
+                let ps_script = format!(
+                    "Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.ToLower().Contains('{}') }} | Select-Object -ExpandProperty Id",
+                    dir_lower
+                );
+                if let Ok(child) = Command::new("powershell")
+                    .args(["-NoProfile", "-Command", &ps_script])
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
+                    if let Some(output) = run_with_timeout(child, 10) {
+                        let text = String::from_utf8_lossy(&output.stdout);
+                        for line in text.lines() {
+                            if let Ok(_pid) = line.trim().parse::<u32>() {
+                                let _ = Command::new("taskkill")
+                                    .args(["/F", "/PID", line.trim()])
+                                    .output();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 等文件锁释放（Node.js 进程退出需要时间）
+        std::thread::sleep(std::time::Duration::from_secs(2));
     }
     #[cfg(target_os = "macos")]
     {
         let uid = get_uid().unwrap_or(501);
-        let _ = Command::new("launchctl")
+        if let Ok(child) = Command::new("launchctl")
             .args(["bootout", &format!("gui/{uid}/ai.openclaw.gateway")])
-            .output();
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            run_with_timeout(child, 10);
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
     #[cfg(target_os = "linux")]
     {
-        let _ = Command::new("pkill")
+        if let Ok(child) = Command::new("pkill")
             .args(["-f", "openclaw.*gateway"])
-            .output();
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            run_with_timeout(child, 10);
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
 
-    // 2. 清理 npm 全局 bin 目录下的 openclaw 残留文件（Windows EEXIST 根因）
+    // 3. 清理 npm 全局 bin 目录下的 openclaw 残留文件（Windows EEXIST 根因）
     #[cfg(target_os = "windows")]
     {
         if let Some(npm_bin) = npm_global_bin_dir() {
@@ -698,8 +800,7 @@ pub fn save_openclaw_json(config: &Value) -> Result<(), String> {
 
 /// 供其他模块复用：触发 Gateway 重载
 pub async fn do_reload_gateway(app: &tauri::AppHandle) -> Result<String, String> {
-    let _ = app; // 预留扩展用
-    reload_gateway().await
+    reload_gateway_internal(Some(app)).await
 }
 
 #[tauri::command]
@@ -2884,10 +2985,25 @@ async fn try_standalone_install(
         .await
         .map_err(|e| format!("standalone 清单解析失败: {e}"))?;
 
-    let remote_version = manifest
-        .get("version")
-        .and_then(|v| v.as_str())
-        .ok_or("standalone 清单缺少 version 字段")?;
+    // 兼容两种 latest.json 格式：
+    // 新格式（CI 生成）: { "editions": { "zh": { "version": "...", "base_url": "..." } } }
+    // 旧格式（兼容）:   { "version": "...", "base_url": "..." }
+    let edition_obj = manifest.get("editions").and_then(|e| e.get("zh"));
+    let (remote_version, manifest_base_url, archive_prefix) = if let Some(ed) = edition_obj {
+        let ver = ed
+            .get("version")
+            .and_then(|v| v.as_str())
+            .ok_or("standalone 清单 editions.zh 缺少 version 字段")?;
+        let bu = ed.get("base_url").and_then(|v| v.as_str());
+        (ver, bu, "openclaw-zh")
+    } else {
+        let ver = manifest
+            .get("version")
+            .and_then(|v| v.as_str())
+            .ok_or("standalone 清单缺少 version 字段")?;
+        let bu = manifest.get("base_url").and_then(|v| v.as_str());
+        (ver, bu, "openclaw")
+    };
 
     // 版本匹配检查
     if version != "latest" && !versions_match(remote_version, version) {
@@ -2900,15 +3016,12 @@ async fn try_standalone_install(
     let remote_base = if let Some(ovr) = override_base_url {
         ovr
     } else {
-        manifest
-            .get("base_url")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&default_base)
+        manifest_base_url.unwrap_or(&default_base)
     };
 
     // 2. 构造下载 URL
     let ext = standalone_archive_ext();
-    let filename = format!("openclaw-{remote_version}-{platform}.{ext}");
+    let filename = format!("{archive_prefix}-{remote_version}-{platform}.{ext}");
     let download_url = format!("{remote_base}/{filename}");
 
     let _ = app.emit("upgrade-log", format!("从 {source_label} 下载: {filename}"));
@@ -2956,6 +3069,16 @@ async fn try_standalone_install(
             if total_bytes > 0 {
                 let pct = 15 + ((downloaded as f64 / total_bytes as f64) * 55.0) as u32;
                 if pct > last_progress {
+                    // 每 5% 输出一次文字进度
+                    if pct / 5 > last_progress / 5 {
+                        let dl_mb = downloaded as f64 / 1_048_576.0;
+                        let total_mb = total_bytes as f64 / 1_048_576.0;
+                        let real_pct = (downloaded as f64 / total_bytes as f64 * 100.0) as u32;
+                        let _ = app.emit(
+                            "upgrade-log",
+                            format!("下载中 {real_pct}% ({dl_mb:.0}/{total_mb:.0}MB)"),
+                        );
+                    }
                     last_progress = pct;
                     let _ = app.emit("upgrade-progress", pct.min(70));
                 }
@@ -3433,38 +3556,69 @@ async fn upgrade_openclaw_inner(
         && (method == "auto" || method == "standalone-r2" || method == "standalone-github");
 
     if try_standalone {
-        // standalone-github 模式：使用 GitHub Releases 下载地址
-        let github_base = if method == "standalone-github" {
-            Some(format!(
-                "https://github.com/qingchencloud/openclaw-standalone/releases/download/v{}",
-                ver
-            ))
-        } else {
-            None
-        };
-        match try_standalone_install(&app, ver, github_base.as_deref()).await {
-            Ok(installed_ver) => {
-                let _ = app.emit("upgrade-progress", 100);
-                super::refresh_enhanced_path();
-                crate::commands::service::invalidate_cli_detection_cache();
-                let label = if method == "standalone-github" {
-                    "GitHub"
-                } else {
-                    "CDN"
-                };
-                let msg = format!("✅ standalone ({label}) 安装完成，当前版本: {installed_ver}");
-                let _ = app.emit("upgrade-log", &msg);
-                return Ok(msg);
+        let github_release_base = format!(
+            "https://github.com/qingchencloud/openclaw-standalone/releases/download/v{}",
+            ver
+        );
+
+        if method == "standalone-github" {
+            // standalone-github 模式：只走 GitHub
+            match try_standalone_install(&app, ver, Some(&github_release_base)).await {
+                Ok(installed_ver) => {
+                    let _ = app.emit("upgrade-progress", 100);
+                    super::refresh_enhanced_path();
+                    crate::commands::service::invalidate_cli_detection_cache();
+                    let msg = format!("✅ standalone (GitHub) 安装完成，当前版本: {installed_ver}");
+                    let _ = app.emit("upgrade-log", &msg);
+                    return Ok(msg);
+                }
+                Err(reason) => {
+                    return Err(format!("standalone 安装失败: {reason}"));
+                }
             }
-            Err(reason) => {
-                if method == "auto" {
+        } else {
+            // auto / standalone-r2 模式：R2 CDN → GitHub Releases fallback
+            match try_standalone_install(&app, ver, None).await {
+                Ok(installed_ver) => {
+                    let _ = app.emit("upgrade-progress", 100);
+                    super::refresh_enhanced_path();
+                    crate::commands::service::invalidate_cli_detection_cache();
+                    let msg = format!("✅ standalone (CDN) 安装完成，当前版本: {installed_ver}");
+                    let _ = app.emit("upgrade-log", &msg);
+                    return Ok(msg);
+                }
+                Err(cdn_reason) => {
                     let _ = app.emit(
                         "upgrade-log",
-                        format!("standalone 不可用（{reason}），降级到 npm 安装..."),
+                        format!("CDN 下载失败（{cdn_reason}），尝试从 GitHub Releases 下载..."),
                     );
                     let _ = app.emit("upgrade-progress", 5);
-                } else {
-                    return Err(format!("standalone 安装失败: {reason}"));
+                    // Fallback: GitHub Releases
+                    match try_standalone_install(&app, ver, Some(&github_release_base)).await {
+                        Ok(installed_ver) => {
+                            let _ = app.emit("upgrade-progress", 100);
+                            super::refresh_enhanced_path();
+                            crate::commands::service::invalidate_cli_detection_cache();
+                            let msg = format!(
+                                "✅ standalone (GitHub) 安装完成，当前版本: {installed_ver}"
+                            );
+                            let _ = app.emit("upgrade-log", &msg);
+                            return Ok(msg);
+                        }
+                        Err(gh_reason) => {
+                            if method == "auto" {
+                                let _ = app.emit(
+                                    "upgrade-log",
+                                    format!("standalone 不可用（GitHub: {gh_reason}），降级到 npm 安装..."),
+                                );
+                                let _ = app.emit("upgrade-progress", 5);
+                            } else {
+                                return Err(format!(
+                                    "standalone 安装失败: CDN={cdn_reason}, GitHub={gh_reason}"
+                                ));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3475,7 +3629,7 @@ async fn upgrade_openclaw_inner(
     // 切换源时需要卸载旧包，但为避免安装失败导致 CLI 丢失，
     // 先安装新包，成功后再卸载旧包
     let old_pkg = npm_package_name(&current_source);
-    let need_uninstall_old = current_source != source;
+    let need_uninstall_old = current_source != source && old_pkg != pkg_name;
 
     if requested_version.is_none() {
         if let Some(recommended) = &recommended_version {
@@ -3695,11 +3849,37 @@ async fn upgrade_openclaw_inner(
     }
 
     // 安装成功后再卸载旧包（确保 CLI 始终可用）
+    // 清理步骤采用错误隔离：任何清理失败都不影响安装成功的最终结果
     if need_uninstall_old {
         let _ = app.emit("upgrade-log", format!("清理旧版本 ({old_pkg})..."));
-        let _ = npm_command_elevated()
+        // npm uninstall 加 30s 超时，避免无限卡住
+        let uninstall_child = npm_command_elevated()
             .args(["uninstall", "-g", old_pkg])
-            .output();
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        match uninstall_child {
+            Ok(mut child) => {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(_status)) => break,
+                        Ok(None) => {
+                            if std::time::Instant::now() >= deadline {
+                                let _ = child.kill();
+                                let _ = app.emit("upgrade-log", "⚠️ 清理旧版本超时（30s），已跳过");
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = app.emit("upgrade-log", format!("⚠️ 清理旧版本启动失败: {e}，已跳过"));
+            }
+        }
 
         // 清理 standalone 安装目录（不论从 standalone 切走还是切到 standalone，
         // npm 路径已经安装了新 CLI，standalone 残留会干扰源检测）
@@ -3709,7 +3889,57 @@ async fn upgrade_openclaw_inner(
                     "upgrade-log",
                     format!("清理 standalone 残留: {}", sa_dir.display()),
                 );
-                let _ = std::fs::remove_dir_all(&sa_dir);
+
+                // Windows: 终止占用该目录的 node.exe 进程
+                // 使用 PowerShell Get-Process（兼容 Windows 11，wmic 已废弃）
+                #[cfg(target_os = "windows")]
+                {
+                    let dir_lower = sa_dir
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .replace('\\', "\\\\");
+                    let ps_script = format!(
+                        "Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.ToLower().Contains('{}') }} | Select-Object -ExpandProperty Id",
+                        dir_lower
+                    );
+                    if let Ok(output) = Command::new("powershell")
+                        .args(["-NoProfile", "-Command", &ps_script])
+                        .output()
+                    {
+                        let text = String::from_utf8_lossy(&output.stdout);
+                        for line in text.lines() {
+                            if let Ok(pid) = line.trim().parse::<u32>() {
+                                let _ =
+                                    app.emit("upgrade-log", format!("终止占用进程 PID {pid}..."));
+                                let _ = Command::new("taskkill")
+                                    .args(["/F", "/PID", &pid.to_string()])
+                                    .output();
+                            }
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+
+                match std::fs::remove_dir_all(&sa_dir) {
+                    Ok(()) => {
+                        let _ = app.emit("upgrade-log", "standalone 残留已清理 ✓");
+                    }
+                    Err(_) => {
+                        let _ = app.emit("upgrade-log", "文件被占用，等待后重试...");
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        if let Err(e) = std::fs::remove_dir_all(&sa_dir) {
+                            let _ = app.emit(
+                                "upgrade-log",
+                                format!(
+                                    "⚠️ 清理 standalone 残留失败: {e}（可手动删除 {}）",
+                                    sa_dir.display()
+                                ),
+                            );
+                        } else {
+                            let _ = app.emit("upgrade-log", "standalone 残留已清理（重试成功）✓");
+                        }
+                    }
+                }
             }
         }
     }
@@ -3734,6 +3964,8 @@ async fn upgrade_openclaw_inner(
         {
             let _ = openclaw_command().args(["gateway", "stop"]).output();
         }
+        // 等待旧 Gateway 进程退出
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         // 重新安装（刷新后的 PATH 会找到新二进制）
         use crate::utils::openclaw_command_async;
         let gw_out = openclaw_command_async()
@@ -3816,6 +4048,10 @@ async fn uninstall_openclaw_inner(
         let _ = openclaw_command().args(["gateway", "uninstall"]).output();
     }
 
+    // 等待进程完全退出（Gateway stop 是异步的，需要等文件锁释放）
+    let _ = app.emit("upgrade-log", "等待进程退出...");
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
     // 3. 清理 standalone 安装（所有可能的位置）
     for sa_dir in &all_standalone_dirs() {
         if sa_dir.exists() {
@@ -3823,13 +4059,58 @@ async fn uninstall_openclaw_inner(
                 "upgrade-log",
                 format!("清理 standalone 安装: {}", sa_dir.display()),
             );
-            if let Err(e) = std::fs::remove_dir_all(sa_dir) {
-                let _ = app.emit(
-                    "upgrade-log",
-                    format!("⚠️ 清理 standalone 失败: {e}（可能需要管理员权限）"),
+
+            // Windows: 先尝试终止占用该目录的 node.exe 进程
+            // 使用 PowerShell Get-Process（兼容 Windows 11，wmic 已废弃）
+            #[cfg(target_os = "windows")]
+            {
+                let dir_lower = sa_dir
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .replace('\\', "\\\\");
+                let ps_script = format!(
+                    "Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.ToLower().Contains('{}') }} | Select-Object -ExpandProperty Id",
+                    dir_lower
                 );
-            } else {
-                let _ = app.emit("upgrade-log", "standalone 安装已清理 ✓");
+                if let Ok(output) = Command::new("powershell")
+                    .args(["-NoProfile", "-Command", &ps_script])
+                    .output()
+                {
+                    let text = String::from_utf8_lossy(&output.stdout);
+                    for line in text.lines() {
+                        if let Ok(pid) = line.trim().parse::<u32>() {
+                            let _ = app.emit("upgrade-log", format!("终止占用进程 PID {pid}..."));
+                            let _ = Command::new("taskkill")
+                                .args(["/F", "/PID", &pid.to_string()])
+                                .output();
+                        }
+                    }
+                }
+                // 短暂等待进程退出
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+
+            // 尝试删除，失败则重试一次
+            match std::fs::remove_dir_all(sa_dir) {
+                Ok(()) => {
+                    let _ = app.emit("upgrade-log", "standalone 安装已清理 ✓");
+                }
+                Err(_) => {
+                    // 重试：等待后再删一次
+                    let _ = app.emit("upgrade-log", "文件被占用，等待后重试...");
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    if let Err(e) = std::fs::remove_dir_all(sa_dir) {
+                        let _ = app.emit(
+                            "upgrade-log",
+                            format!(
+                                "⚠️ 清理 standalone 失败: {e}（可手动删除 {}）",
+                                sa_dir.display()
+                            ),
+                        );
+                    } else {
+                        let _ = app.emit("upgrade-log", "standalone 安装已清理（重试成功）✓");
+                    }
+                }
             }
         }
     }
@@ -4640,8 +4921,8 @@ async fn reload_gateway_via_http() -> Result<String, String> {
 /// 重载 Gateway 服务
 /// Windows/Linux: 优先尝试 HTTP 热重载（不重启进程）
 /// 如果 HTTP 重载失败，回退到 restart_service（会触发 Guardian 重启循环）
-#[tauri::command]
-pub async fn reload_gateway() -> Result<String, String> {
+#[allow(unused_variables)]
+async fn reload_gateway_internal(app: Option<&tauri::AppHandle>) -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         let uid = get_uid()?;
@@ -4660,23 +4941,28 @@ pub async fn reload_gateway() -> Result<String, String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        // 优先尝试 HTTP 热重载（不影响现有连接）
         match reload_gateway_via_http().await {
             Ok(msg) => Ok(msg),
-            Err(_) => {
-                // HTTP 重载失败，回退到进程重启
-                crate::commands::service::restart_service("ai.openclaw.gateway".into())
-                    .await
-                    .map(|_| "Gateway 已重启".to_string())
-            }
+            Err(_) => crate::commands::service::restart_service(
+                app.cloned()
+                    .ok_or_else(|| "缺少 AppHandle，无法回退到 Gateway 进程重启".to_string())?,
+                "ai.openclaw.gateway".into(),
+            )
+            .await
+            .map(|_| "Gateway 已重启".to_string()),
         }
     }
 }
 
+#[tauri::command]
+pub async fn reload_gateway(app: tauri::AppHandle) -> Result<String, String> {
+    reload_gateway_internal(Some(&app)).await
+}
+
 /// 重启 Gateway 服务（与 reload_gateway 相同实现）
 #[tauri::command]
-pub async fn restart_gateway() -> Result<String, String> {
-    reload_gateway().await
+pub async fn restart_gateway(app: tauri::AppHandle) -> Result<String, String> {
+    reload_gateway_internal(Some(&app)).await
 }
 
 /// 运行 openclaw doctor --fix 自动修复配置问题

@@ -85,4 +85,10 @@ export default {
   approvalsModeBoth: _('两者都发（both）', 'Both', '兩者都發（both）'),
   approvalsForwardExec: _('转发执行请求', 'Forward Exec Requests', '轉發執行請求'),
   approvalsForwardExecHint: _('将 exec 审批请求转发到渠道（默认关闭，低风险场景可开启）', 'Forward exec approval requests to channels (off by default, enable for low-risk scenarios)', '將 exec 審批請求轉發到頻道（預設關閉，低風險場景可開啟）'),
+  pendingApprovals: _('待处理审批队列', 'Pending Approval Queue', '待處理審批佇列'),
+  refreshApprovals: _('刷新', 'Refresh', '重新整理'),
+  approvalsLoadingQueue: _('加载审批队列...', 'Loading approval queue...', '載入審批佇列...'),
+  approvalsQueueEmpty: _('当前没有待处理的审批请求', 'No pending approval requests', '目前沒有待處理的審批請求'),
+  approvalsGwNotReady: _('Gateway 未连接，无法加载审批队列', 'Gateway not connected, cannot load approval queue', 'Gateway 未連線，無法載入審批佇列'),
+  approvalsUnsupported: _('当前 Gateway 版本不支持审批队列查询，请升级到 OpenClaw 2026.4.9+', 'Approval queue requires OpenClaw 2026.4.9+', '目前 Gateway 版本不支援審批佇列查詢，請升級到 OpenClaw 2026.4.9+'),
 }

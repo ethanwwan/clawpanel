@@ -88,8 +88,14 @@ mod hex {
 }
 
 /// 生成 Gateway connect 帧（含 Ed25519 签名）
+/// gateway_token: token 模式认证凭据（可为空）
+/// gateway_password: password 模式认证凭据（可为空，新增）
 #[tauri::command]
-pub fn create_connect_frame(nonce: String, gateway_token: String) -> Result<Value, String> {
+pub fn create_connect_frame(
+    nonce: String,
+    gateway_token: String,
+    gateway_password: Option<String>,
+) -> Result<Value, String> {
     let (device_id, pub_b64, signing_key) = get_or_create_key()?;
     let signed_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -99,16 +105,33 @@ pub fn create_connect_frame(nonce: String, gateway_token: String) -> Result<Valu
     let platform = std::env::consts::OS; // "windows" | "macos" | "linux"
     let device_family = "desktop";
 
+    // v3 签名 payload 中 token 字段：优先 token，其次 password，最后空串
+    let auth_secret = if !gateway_token.is_empty() {
+        &gateway_token
+    } else {
+        gateway_password.as_deref().unwrap_or("")
+    };
+
     let scopes_str = SCOPES.join(",");
     // v3 格式：v3|deviceId|clientId|clientMode|role|scopes|signedAt|token|nonce|platform|deviceFamily
     // 使用 openclaw-control-ui + ui 模式，使 Gateway 识别为 Control UI 客户端，
     // 本地连接时触发静默自动配对（shouldAllowSilentLocalPairing = true）
     let payload_str = format!(
-        "v3|{device_id}|openclaw-control-ui|ui|operator|{scopes_str}|{signed_at}|{gateway_token}|{nonce}|{platform}|{device_family}"
+        "v3|{device_id}|openclaw-control-ui|ui|operator|{scopes_str}|{signed_at}|{auth_secret}|{nonce}|{platform}|{device_family}"
     );
 
     let signature = signing_key.sign(payload_str.as_bytes());
     let sig_b64 = base64_url_encode(&signature.to_bytes());
+
+    // 构建 auth 对象：根据有无 token/password 选择填充字段
+    let password = gateway_password.unwrap_or_default();
+    let auth = if !gateway_token.is_empty() {
+        serde_json::json!({ "token": gateway_token })
+    } else if !password.is_empty() {
+        serde_json::json!({ "password": password })
+    } else {
+        serde_json::json!({})
+    };
 
     let frame = serde_json::json!({
         "type": "req",
@@ -127,7 +150,7 @@ pub fn create_connect_frame(nonce: String, gateway_token: String) -> Result<Valu
             "role": "operator",
             "scopes": SCOPES,
             "caps": ["tool-events"],
-            "auth": { "token": gateway_token },
+            "auth": auth,
             "device": {
                 "id": device_id,
                 "publicKey": pub_b64,

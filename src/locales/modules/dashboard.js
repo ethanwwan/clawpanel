@@ -109,4 +109,9 @@ export default {
   startSent: _('已发送启动命令', 'Start command sent', '已發送啟動指令', '起動コマンド送信済み', '시작 명령 전송됨'),
   foreignGatewayBanner: _('检测到外部 Gateway 正在运行，当前面板无法管理', 'An external Gateway is running, not managed by this panel', '偵測到外部 Gateway 正在執行，目前面板無法管理', '外部 Gateway が実行中です。このパネルでは管理できません', '외부 Gateway가 실행 중이며, 이 패널에서 관리할 수 없습니다', 'Đã phát hiện Gateway bên ngoài đang chạy, bảng điều khiển này không thể quản lý', 'Se detectó un Gateway externo en ejecución, no gestionado por este panel', 'Um Gateway externo está em execução, não gerenciado por este painel', 'Обнаружен внешний Gateway, не управляемый этой панелью', 'Un Gateway externe est en cours d\'exécution, non géré par ce panneau', 'Ein externer Gateway läuft, der nicht von diesem Panel verwaltet wird'),
   claimGateway: _('认领 Gateway', 'Claim Gateway', '認領 Gateway', 'Gateway を引き取る', 'Gateway 인수', 'Nhận Gateway', 'Reclamar Gateway', 'Reivindicar Gateway', 'Принять Gateway', 'Revendiquer Gateway', 'Gateway übernehmen'),
+  wsConnected: _('已连接', 'Connected', '已連線', '接続済み', '연결됨', 'Đã kết nối', 'Conectado', 'Conectado', 'Подключено', 'Connecté', 'Verbunden'),
+  wsDisconnected: _('未连接', 'Disconnected', '未連線', '未接続', '연결 안됨', 'Chưa kết nối', 'Desconectado', 'Desconectado', 'Отключено', 'Déconnecté', 'Getrennt'),
+  wsHandshaking: _('握手中', 'Handshaking', '握手中', 'ハンドシェイク中', '핸드셰이크 중', 'Đang bắt tay', 'Negociando', 'Negociando', 'Рукопожатие', 'Négociation', 'Handshake'),
+  wsReconnecting: _('重连中', 'Reconnecting', '重連中', '再接続中', '재연결 중', 'Đang kết nối lại', 'Reconectando', 'Reconectando', 'Переподключение', 'Reconnexion', 'Neuverbindung'),
+  connectedChannels: _('消息渠道', 'Channels', '訊息渠道', 'チャネル', '메시지 채널', 'Kênh nhắn tin', 'Canales', 'Canais', 'Каналы', 'Canaux', 'Kanäle'),
 }

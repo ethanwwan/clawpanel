@@ -4,8 +4,8 @@ mod tray;
 mod utils;
 
 use commands::{
-    agent, assistant, config, device, extensions, logs, memory, messaging, pairing, service,
-    skills, update,
+    agent, assistant, config, device, diagnose, extensions, logs, memory, messaging, pairing,
+    service, skills, update,
 };
 
 pub fn run() {
@@ -125,7 +125,10 @@ pub fn run() {
             service::stop_service,
             service::restart_service,
             service::claim_gateway,
+            service::probe_gateway_port,
             service::guardian_status,
+            // 诊断
+            diagnose::diagnose_gateway_connection,
             // 日志
             logs::read_log_tail,
             logs::search_log,
@@ -183,6 +186,9 @@ pub fn run() {
             messaging::repair_qqbot_channel_setup,
             messaging::list_configured_platforms,
             messaging::get_channel_plugin_status,
+            messaging::list_all_plugins,
+            messaging::toggle_plugin,
+            messaging::install_plugin,
             messaging::install_channel_plugin,
             messaging::install_qqbot_plugin,
             messaging::run_channel_action,

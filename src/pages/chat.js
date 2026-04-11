@@ -102,6 +102,7 @@ let _hostedAutoStopEl = null
 let _hostedSaveBtn = null, _hostedStopBtn = null, _hostedCloseBtn = null
 let _hostedDefaults = null
 let _hostedSessionConfig = null
+let _hostedBoundSessionKey = null
 let _hostedRuntime = { ...HOSTED_RUNTIME_DEFAULT }
 let _hostedBusy = false
 let _hostedAbort = null
@@ -1288,10 +1289,14 @@ function renderSessionList(sessions) {
     const msgCount = s.messageCount || s.messages || 0
     const agentId = parseSessionAgent(key)
     const displayLabel = getDisplayLabel(key) || label
+    const cpCount = s.compactionCheckpointCount || 0
     return `<div class="chat-session-card${active}" data-key="${escapeAttr(key)}">
       <div class="chat-session-card-header">
         <span class="chat-session-label" title="${t('chat.doubleClickRename')}">${escapeAttr(displayLabel)}</span>
-        <button class="chat-session-del" data-del="${escapeAttr(key)}" title="${t('common.delete')}">×</button>
+        <div style="display:flex;gap:2px;align-items:center">
+          ${cpCount > 0 ? `<button class="chat-session-del" data-compaction="${escapeAttr(key)}" title="${t('chat.compactionHistory')}" style="color:var(--text-tertiary);font-size:11px">⟳${cpCount}</button>` : ''}
+          <button class="chat-session-del" data-del="${escapeAttr(key)}" title="${t('common.delete')}">×</button>
+        </div>
       </div>
       <div class="chat-session-card-meta">
         ${agentId && agentId !== 'main' ? `<span class="chat-session-agent">${escapeAttr(agentId)}</span>` : ''}
@@ -1302,6 +1307,8 @@ function renderSessionList(sessions) {
   }).join('')
 
   _sessionListEl.onclick = (e) => {
+    const cpBtn = e.target.closest('[data-compaction]')
+    if (cpBtn) { e.stopPropagation(); showCompactionHistory(cpBtn.dataset.compaction); return }
     const delBtn = e.target.closest('[data-del]')
     if (delBtn) { e.stopPropagation(); deleteSession(delBtn.dataset.del); return }
     const item = e.target.closest('[data-key]')
@@ -1429,6 +1436,96 @@ async function deleteSession(key) {
     else refreshSessionList()
   } catch (e) {
     toast(`${t('common.operationFailed')}: ${e.message}`, 'error')
+  }
+}
+
+// ===== 4.9: Sessions Compaction History =====
+async function showCompactionHistory(key) {
+  if (!key || !wsClient.gatewayReady) return
+  const label = getDisplayLabel(key)
+  toast(t('chat.compactionLoading'), 'info')
+  try {
+    const result = await wsClient.sessionsCompactionList(key)
+    const checkpoints = result?.checkpoints || []
+    if (!checkpoints.length) {
+      toast(t('chat.compactionEmpty'), 'info')
+      return
+    }
+    const listHtml = checkpoints.map((cp, idx) => {
+      const id = cp.id || cp.checkpointId || `cp-${idx}`
+      const ts = cp.timestamp || cp.createdAt || 0
+      const timeStr = ts ? new Date(typeof ts === 'number' && ts < 1e12 ? ts * 1000 : ts).toLocaleString() : '—'
+      const tokensBefore = cp.tokensBefore ?? '—'
+      const tokensAfter = cp.tokensAfter ?? '—'
+      return `<div style="padding:10px 0;border-bottom:1px solid var(--border-primary);display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <div style="min-width:0;flex:1">
+          <div style="font-size:13px;font-weight:500">#${idx + 1} · ${escapeAttr(timeStr)}</div>
+          <div style="font-size:12px;color:var(--text-tertiary);margin-top:2px">${tokensBefore} → ${tokensAfter} tokens</div>
+        </div>
+        <div style="display:flex;gap:4px;flex-shrink:0">
+          <button class="btn btn-sm btn-secondary" data-cp-branch="${escapeAttr(id)}">${t('chat.compactionBranch')}</button>
+          <button class="btn btn-sm btn-warning" data-cp-restore="${escapeAttr(id)}">${t('chat.compactionRestore')}</button>
+        </div>
+      </div>`
+    }).join('')
+
+    const overlay = document.createElement('div')
+    overlay.className = 'modal-overlay'
+    overlay.innerHTML = `<div class="modal" style="max-width:520px;max-height:80vh;overflow:auto">
+      <div class="modal-header"><h3>${escapeAttr(t('chat.compactionHistory'))}: ${escapeAttr(label)}</h3></div>
+      <div class="modal-body" style="padding:0 var(--space-md)">${listHtml}</div>
+      <div class="modal-footer"><button class="btn btn-secondary" data-cp-close>${t('common.close')}</button></div>
+    </div>`
+    document.body.appendChild(overlay)
+
+    overlay.addEventListener('click', async (e) => {
+      if (e.target === overlay || e.target.closest('[data-cp-close]')) {
+        overlay.remove()
+        return
+      }
+      const branchBtn = e.target.closest('[data-cp-branch]')
+      if (branchBtn) {
+        branchBtn.disabled = true
+        try {
+          const res = await wsClient.sessionsCompactionBranch(key, branchBtn.dataset.cpBranch)
+          toast(t('chat.compactionBranchDone'), 'success')
+          overlay.remove()
+          if (res?.key) void switchSession(res.key)
+          else refreshSessionList()
+        } catch (err) {
+          toast(`${t('common.operationFailed')}: ${err.message}`, 'error')
+          branchBtn.disabled = false
+        }
+        return
+      }
+      const restoreBtn = e.target.closest('[data-cp-restore]')
+      if (restoreBtn) {
+        const yes = await showConfirm(t('chat.compactionConfirmRestore'))
+        if (!yes) return
+        restoreBtn.disabled = true
+        try {
+          await wsClient.sessionsCompactionRestore(key, restoreBtn.dataset.cpRestore)
+          toast(t('chat.compactionRestoreDone'), 'success')
+          overlay.remove()
+          if (key === _sessionKey) {
+            clearMessages()
+            _lastHistoryHash = ''
+            loadHistory()
+          }
+          refreshSessionList()
+        } catch (err) {
+          toast(`${t('common.operationFailed')}: ${err.message}`, 'error')
+          restoreBtn.disabled = false
+        }
+      }
+    })
+  } catch (e) {
+    const msg = String(e?.message || e || '').toLowerCase()
+    if (msg.includes('unknown method') || msg.includes('not found') || msg.includes('unsupported')) {
+      toast(t('chat.compactionUnsupported'), 'warning')
+    } else {
+      toast(`${t('common.operationFailed')}: ${e.message}`, 'error')
+    }
   }
 }
 
@@ -1699,8 +1796,39 @@ function handleEvent(msg) {
 }
 
 function handleChatEvent(payload) {
-  // sessionKey 过滤
-  if (payload.sessionKey && payload.sessionKey !== _sessionKey && _sessionKey) return
+  const hostedSessionKey = getHostedBoundSessionKey()
+  const isCurrentSession = !payload.sessionKey || !_sessionKey || payload.sessionKey === _sessionKey
+  const isHostedSession = !!payload.sessionKey && !!hostedSessionKey && payload.sessionKey === hostedSessionKey
+
+  // sessionKey 过滤：当前会话照常渲染；托管绑定会话在后台继续驱动循环
+  if (!isCurrentSession && !isHostedSession) return
+
+  if (!isCurrentSession && isHostedSession) {
+    if (payload.state === 'final' && shouldCaptureHostedTarget(payload)) {
+      const c = extractChatContent(payload.message)
+      const capturedText = c?.text || ''
+      if (capturedText) {
+        appendHostedTarget(capturedText)
+        if (detectStopFromText(capturedText)) {
+          stopHostedAgent()
+        } else {
+          maybeTriggerHostedRun()
+        }
+      }
+    }
+
+    if (payload.state === 'error' && _hostedSessionConfig?.enabled) {
+      _hostedRuntime.errorCount = (_hostedRuntime.errorCount || 0) + 1
+      _hostedRuntime.lastError = payload.errorMessage || payload.error?.message || t('common.error')
+      _hostedRuntime.pending = false
+      if (_hostedRuntime.errorCount >= _hostedSessionConfig.retryLimit) {
+        _hostedRuntime.status = HOSTED_STATUS.ERROR
+      }
+      persistHostedRuntime()
+      updateHostedBadge()
+    }
+    return
+  }
 
   const { state } = payload
   const runId = payload.runId
@@ -2876,6 +3004,10 @@ function getHostedSessionKey() {
   return _sessionKey || localStorage.getItem(STORAGE_SESSION_KEY) || 'agent:main:main'
 }
 
+function getHostedBoundSessionKey() {
+  return _hostedSessionConfig?.boundSessionKey || _hostedBoundSessionKey || ''
+}
+
 async function loadHostedDefaults() {
   try {
     const panel = await api.readPanelConfig()
@@ -2889,23 +3021,28 @@ function loadHostedSessionConfig() {
   const key = getHostedSessionKey()
   const current = data[key] || {}
   _hostedSessionConfig = { ...HOSTED_DEFAULTS, ..._hostedDefaults, ...current }
+  if (_hostedSessionConfig.enabled && !_hostedSessionConfig.boundSessionKey) {
+    _hostedSessionConfig.boundSessionKey = key
+  }
+  _hostedBoundSessionKey = _hostedSessionConfig.boundSessionKey || null
   if (!_hostedSessionConfig.state) _hostedSessionConfig.state = { ...HOSTED_RUNTIME_DEFAULT }
   if (!_hostedSessionConfig.history) _hostedSessionConfig.history = []
   _hostedRuntime = { ...HOSTED_RUNTIME_DEFAULT, ..._hostedSessionConfig.state }
   updateHostedBadge()
 }
 
-function saveHostedSessionConfig(nextConfig) {
+function saveHostedSessionConfig(nextConfig, key = null) {
   let data = {}
   try { data = JSON.parse(localStorage.getItem(HOSTED_SESSIONS_KEY) || '{}') } catch { data = {} }
-  data[getHostedSessionKey()] = nextConfig
+  data[key || getHostedSessionKey()] = nextConfig
   localStorage.setItem(HOSTED_SESSIONS_KEY, JSON.stringify(data))
 }
 
-function persistHostedRuntime() {
+function persistHostedRuntime(persistKey = null) {
   if (!_hostedSessionConfig) return
   _hostedSessionConfig.state = { ..._hostedRuntime }
-  saveHostedSessionConfig(_hostedSessionConfig)
+  const key = persistKey || getHostedBoundSessionKey() || getHostedSessionKey()
+  saveHostedSessionConfig(_hostedSessionConfig, key)
 }
 
 function updateHostedBadge() {
@@ -3005,7 +3142,9 @@ async function startHostedAgent() {
   const retryLimit = Math.max(0, parseInt(_hostedRetryLimitEl?.value || HOSTED_DEFAULTS.retryLimit, 10))
   const timerOn = _page?.querySelector('#hosted-agent-timer-on')?.checked
   const autoStopMinutes = timerOn ? Math.max(0, parseInt(_hostedAutoStopEl?.value || 0, 10)) : 0
-  _hostedSessionConfig = { ..._hostedSessionConfig, prompt, enabled: true, maxSteps, stepDelayMs, retryLimit, autoStopMinutes }
+  const boundSessionKey = getHostedSessionKey()
+  _hostedBoundSessionKey = boundSessionKey
+  _hostedSessionConfig = { ..._hostedSessionConfig, prompt, enabled: true, maxSteps, stepDelayMs, retryLimit, autoStopMinutes, boundSessionKey }
   const sysContent = HOSTED_SYSTEM_PROMPT + '\n\nUser goal: ' + prompt
   if (!_hostedSessionConfig.history?.length) _hostedSessionConfig.history = [{ role: 'system', content: sysContent }]
   else if (_hostedSessionConfig.history[0]?.role === 'system') _hostedSessionConfig.history[0].content = sysContent
@@ -3030,6 +3169,7 @@ async function startHostedAgent() {
 
 function stopHostedAgent() {
   if (!_hostedSessionConfig) return
+  const boundSessionKey = getHostedBoundSessionKey() || getHostedSessionKey()
   if (_hostedAbort) { _hostedAbort.abort(); _hostedAbort = null }
   clearTimeout(_hostedAutoStopTimer); _hostedAutoStopTimer = null
   clearInterval(_countdownInterval); _countdownInterval = null
@@ -3041,7 +3181,8 @@ function stopHostedAgent() {
   _hostedRuntime.lastError = ''
   _hostedRuntime.errorCount = 0
   _hostedStartTime = 0
-  persistHostedRuntime()
+  persistHostedRuntime(boundSessionKey)
+  _hostedBoundSessionKey = null
   renderHostedPanel()
   updateHostedBadge()
   toast(t('chat.hostedStopped'), 'info')
@@ -3049,6 +3190,8 @@ function stopHostedAgent() {
 
 function shouldCaptureHostedTarget(payload) {
   if (!_hostedSessionConfig?.enabled) return false
+  const hostedSessionKey = getHostedBoundSessionKey()
+  if (payload?.sessionKey && hostedSessionKey && payload.sessionKey !== hostedSessionKey) return false
   if (_hostedRuntime.status === HOSTED_STATUS.PAUSED || _hostedRuntime.status === HOSTED_STATUS.ERROR || _hostedRuntime.status === HOSTED_STATUS.IDLE) return false
   if (payload?.message?.role && payload.message.role !== 'assistant') return false
   const ts = payload?.timestamp || Date.now()
@@ -3112,8 +3255,9 @@ function detectStopFromText(text) {
 async function runHostedAgentStep() {
   if (_hostedBusy || !_hostedSessionConfig?.enabled) return
   const prompt = (_hostedSessionConfig.prompt || '').trim()
+  const hostedSessionKey = getHostedBoundSessionKey() || getHostedSessionKey()
   if (!prompt) return
-  if (!wsClient.gatewayReady || !_sessionKey) {
+  if (!wsClient.gatewayReady || !hostedSessionKey) {
     _hostedRuntime.status = HOSTED_STATUS.PAUSED
     _hostedRuntime.lastError = 'Gateway not ready'
     persistHostedRuntime(); updateHostedBadge()
@@ -3161,7 +3305,7 @@ async function runHostedAgentStep() {
       _hostedRuntime.pending = false
       persistHostedRuntime(); updateHostedBadge()
       // 将指令发给 Gateway Agent
-      try { await wsClient.chatSend(_sessionKey, instruction) } catch {}
+      try { await wsClient.chatSend(hostedSessionKey, instruction) } catch {}
     } else {
       _hostedRuntime.status = HOSTED_STATUS.IDLE
       _hostedRuntime.pending = false
@@ -3283,6 +3427,8 @@ function normalizeHostedBaseUrl(raw, apiType) {
 
 function appendHostedOutput(text) {
   if (!text || !_messagesEl) return
+  const hostedSessionKey = getHostedBoundSessionKey()
+  if (hostedSessionKey && _sessionKey && hostedSessionKey !== _sessionKey) return
   const wrap = document.createElement('div')
   wrap.className = 'msg msg-system msg-hosted'
   wrap.textContent = `[${t('chat.hostedAgent')}] ${text}`

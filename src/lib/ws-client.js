@@ -52,6 +52,8 @@ export class WsClient {
     this._challengeTimer = null
     this._wsId = 0
     this._autoPairAttempts = 0
+    this._authRetryCount = 0
+    this._password = ''
     this._serverVersion = null
 
     // 增强状态追踪
@@ -111,6 +113,7 @@ export class WsClient {
     this._intentionalClose = false
     this._autoPairAttempts = 0
     this._token = token || ''
+    this._password = opts.password || ''
     // 自动检测协议：如果页面通过 HTTPS 加载（反代场景），使用 wss://
     const proto = opts.secure ?? (typeof location !== 'undefined' && location.protocol === 'https:') ? 'wss' : 'ws'
     const nextUrl = `${proto}://${host}/ws?token=${encodeURIComponent(this._token)}`
@@ -143,6 +146,7 @@ export class WsClient {
     this._intentionalClose = false
     this._reconnectAttempts = 0
     this._autoPairAttempts = 0
+    this._authRetryCount = 0
     this._missedHeartbeats = 0
     this._stopPing()
     this._stopHeartbeat()
@@ -196,23 +200,91 @@ export class WsClient {
       this._ws = null
       this._connecting = false
       this._clearChallengeTimer()
-      if (e.code === 4001 || e.code === 4003 || e.code === 4004) {
-        this._setConnected(false, 'auth_failed', e.reason || 'Token 认证失败')
-        this._intentionalClose = true
-        this._flushPending()
+      const reason = (e.reason || '').toLowerCase()
+
+      // ── 4001: Gateway 配置热重载 / 设备被移除 ──
+      // 上游仅在 config reload 和 device removal 时发 4001
+      // 正确做法：短延迟后自动重连，而非永久断开
+      if (e.code === 4001) {
+        console.log('[ws] Gateway 配置变更，3秒后自动重连:', e.reason)
+        this._setConnected(false, 'reconnecting', 'Gateway 配置已更新，自动重连中...')
+        this._gatewayReady = false
+        this._handshaking = false
+        this._stopPing()
+        setTimeout(() => {
+          if (!this._intentionalClose) {
+            this._reconnectAttempts = 0
+            this._doConnect()
+          }
+        }, 3000)
         return
       }
+
+      // ── 1008: 握手期策略拒绝（按 reason 文本精确分流）──
       if (e.code === 1008 && !this._intentionalClose) {
-        if (this._autoPairAttempts < 1) {
-          console.log('[ws] origin not allowed (1008)，尝试自动修复...')
-          this._setConnected(false, 'reconnecting', 'origin not allowed，修复中...')
-          this._autoPairAndReconnect()
+        if (/origin not allowed/i.test(reason)) {
+          // Origin 不在白名单 → 自动配对（写 allowedOrigins + reload）
+          if (this._autoPairAttempts < 1) {
+            console.log('[ws] origin not allowed，尝试自动修复...')
+            this._setConnected(false, 'reconnecting', 'origin 修复中...')
+            this._autoPairAndReconnect()
+            return
+          }
+          this._setConnected(false, 'error', 'origin not allowed，请检查 gateway.controlUi.allowedOrigins 配置')
           return
         }
-        console.warn('[ws] origin 1008 自动修复已尝试过，显示错误')
-        this._setConnected(false, 'error', e.reason || 'origin not allowed，请点击「修复并重连」')
+        if (/unauthorized/i.test(reason)) {
+          // Token/password 不匹配 → 尝试刷新凭据并重连
+          if (this._authRetryCount < 2) {
+            this._authRetryCount++
+            console.log(`[ws] 认证失败，刷新凭据 (${this._authRetryCount}/2):`, e.reason)
+            this._setConnected(false, 'reconnecting', `认证失败，刷新凭据中 (${this._authRetryCount}/2)...`)
+            this._refreshCredentialsAndReconnect()
+            return
+          }
+          this._setConnected(false, 'auth_failed', `认证失败: ${e.reason || 'token mismatch'}。请检查 Gateway Token 配置。`)
+          this._intentionalClose = true
+          this._flushPending()
+          return
+        }
+        if (/pairing required/i.test(reason) || /not.paired/i.test(reason)) {
+          // 设备未配对 → 自动配对
+          if (this._autoPairAttempts < 1) {
+            console.log('[ws] 设备未配对，尝试自动配对...')
+            this._setConnected(false, 'reconnecting', '设备配对中...')
+            this._autoPairAndReconnect()
+            return
+          }
+          this._setConnected(false, 'error', '设备配对失败，请手动执行 openclaw pairing approve')
+          return
+        }
+        if (/device identity required/i.test(reason) || /device auth/i.test(reason)) {
+          // 设备认证问题 → 重新配对
+          if (this._autoPairAttempts < 1) {
+            console.log('[ws] 设备认证问题，尝试重新配对:', e.reason)
+            this._setConnected(false, 'reconnecting', '设备认证修复中...')
+            this._autoPairAndReconnect()
+            return
+          }
+          this._setConnected(false, 'error', `设备认证失败: ${e.reason}`)
+          return
+        }
+        if (/rate.?limit/i.test(reason)) {
+          // 被限流 → 等待后重试
+          console.log('[ws] 被限流，30秒后重试')
+          this._setConnected(false, 'reconnecting', '请求过于频繁，30秒后重试...')
+          setTimeout(() => {
+            if (!this._intentionalClose) this._doConnect()
+          }, 30000)
+          return
+        }
+        // 其他 1008（如 invalid role、protocol mismatch）→ 显示错误
+        console.warn('[ws] 收到 1008 关闭:', e.reason)
+        this._setConnected(false, 'error', e.reason || '连接被 Gateway 拒绝')
         return
       }
+
+      // ── 其他关闭码 → 普通断线重连 ──
       this._setConnected(false)
       this._gatewayReady = false
       this._handshaking = false
@@ -247,21 +319,90 @@ export class WsClient {
       if (!msg.ok || msg.error) {
         const errMsg = msg.error?.message || 'Gateway 握手失败'
         const errCode = msg.error?.code
-        console.error('[ws] connect 失败:', errMsg, errCode)
+        const details = msg.error?.details || {}
+        const detailCode = details.code || ''
+        const nextStep = details.recommendedNextStep || ''
+        console.error('[ws] connect 失败:', { errCode, detailCode, nextStep, errMsg })
 
-        // 如果是配对/origin 错误，尝试自动配对（仅一次，防止无限循环）
-        if (errCode === 'NOT_PAIRED' || errCode === 'PAIRING_REQUIRED' || /origin not allowed/i.test(errMsg)) {
-          if (this._autoPairAttempts < 1) {
-            console.log('[ws] 检测到配对/origin 错误，尝试自动修复...', errCode || errMsg)
-            this._autoPairAndReconnect()
+        // 按 detailCode 精确分流（上游 ConnectErrorDetailCodes）
+        let handled = false
+        switch (detailCode) {
+          case 'PAIRING_REQUIRED':
+          case 'CONTROL_UI_ORIGIN_NOT_ALLOWED':
+            // 可自动修复：配对 + 写 origins
+            if (this._autoPairAttempts < 1) {
+              console.log('[ws] 自动修复:', detailCode)
+              this._autoPairAndReconnect()
+              return
+            }
+            break
+          case 'AUTH_TOKEN_MISMATCH':
+          case 'AUTH_TOKEN_MISSING':
+          case 'AUTH_TOKEN_NOT_CONFIGURED':
+          case 'AUTH_PASSWORD_MISMATCH':
+          case 'AUTH_PASSWORD_MISSING':
+          case 'AUTH_PASSWORD_NOT_CONFIGURED':
+          case 'AUTH_DEVICE_TOKEN_MISMATCH':
+            // 认证凭据问题 → 刷新凭据重试
+            if (this._authRetryCount < 2) {
+              this._authRetryCount++
+              console.log(`[ws] 认证失败 (${detailCode})，刷新凭据 (${this._authRetryCount}/2)`)
+              this._refreshCredentialsAndReconnect()
+              return
+            }
+            handled = true
+            break
+          case 'AUTH_RATE_LIMITED': {
+            // 被限流 → 等待后重试
+            const retryMs = msg.error?.retryAfterMs || 30000
+            console.log(`[ws] 被限流，${Math.round(retryMs / 1000)}秒后重试`)
+            this._setConnected(false, 'reconnecting', `请求过于频繁，${Math.round(retryMs / 1000)}秒后重试...`)
+            setTimeout(() => { if (!this._intentionalClose) this._doConnect() }, retryMs)
             return
           }
-          console.warn('[ws] 自动修复已尝试过，不再重试')
+          case 'DEVICE_IDENTITY_REQUIRED':
+          case 'CONTROL_UI_DEVICE_IDENTITY_REQUIRED':
+          case 'DEVICE_AUTH_SIGNATURE_INVALID':
+          case 'DEVICE_AUTH_NONCE_MISMATCH':
+          case 'DEVICE_AUTH_NONCE_REQUIRED':
+          case 'DEVICE_AUTH_PUBLIC_KEY_INVALID':
+          case 'DEVICE_AUTH_INVALID':
+            // 设备签名/认证问题 → 重新配对
+            if (this._autoPairAttempts < 1) {
+              console.log('[ws] 设备认证问题:', detailCode)
+              this._autoPairAndReconnect()
+              return
+            }
+            break
+          default:
+            // 兼容旧版 Gateway（不含 details）：按 errCode / errMsg 分流
+            if (errCode === 'NOT_PAIRED' || /origin not allowed/i.test(errMsg)) {
+              if (this._autoPairAttempts < 1) {
+                console.log('[ws] 检测到配对/origin 错误，尝试自动修复...', errCode || errMsg)
+                this._autoPairAndReconnect()
+                return
+              }
+            }
+            if (/unauthorized/i.test(errMsg) && this._authRetryCount < 2) {
+              this._authRetryCount++
+              this._refreshCredentialsAndReconnect()
+              return
+            }
         }
 
-        this._setConnected(false, 'error', errMsg)
+        // 使用 recommendedNextStep 给用户更好的提示
+        const hints = {
+          'retry_with_device_token': '设备令牌需要更新，请重启面板',
+          'update_auth_configuration': '请检查 Gateway 认证配置',
+          'update_auth_credentials': '请检查 Gateway Token 是否正确',
+          'wait_then_retry': '请稍后重试',
+          'review_auth_configuration': '请检查 Gateway 安全配置',
+        }
+        const hint = hints[nextStep] || ''
+        const displayMsg = hint ? `${errMsg}（${hint}）` : errMsg
+        this._setConnected(false, 'error', displayMsg)
         this._readyCallbacks.forEach(fn => {
-          try { fn(null, null, { error: true, message: errMsg }) } catch {}
+          try { fn(null, null, { error: true, message: displayMsg, detailCode, nextStep }) } catch {}
         })
         return
       }
@@ -340,10 +481,37 @@ export class WsClient {
     }
   }
 
+  async _refreshCredentialsAndReconnect() {
+    try {
+      // 重新从 openclaw.json 读取最新凭据
+      const config = await api.readOpenclawConfig()
+      const newToken = config?.gateway?.auth?.token || ''
+      const newPassword = config?.gateway?.auth?.password || ''
+      if ((newToken && newToken !== this._token) || (newPassword && newPassword !== this._password)) {
+        console.log('[ws] 检测到凭据变更，使用新凭据重连')
+        this._token = newToken
+        this._password = newPassword
+        const base = this._url.split('?')[0]
+        this._url = `${base}?token=${encodeURIComponent(this._token)}`
+      }
+      // 确保配对和 origins
+      try { await api.autoPairDevice() } catch {}
+      // 3秒后重连
+      setTimeout(() => {
+        if (!this._intentionalClose) {
+          this._doConnect()
+        }
+      }, 3000)
+    } catch (e) {
+      console.error('[ws] 刷新凭据失败:', e)
+      this._setConnected(false, 'error', `凭据刷新失败: ${e}`)
+    }
+  }
+
   async _sendConnectFrame(nonce) {
     this._handshaking = true
     try {
-      const frame = await api.createConnectFrame(nonce, this._token)
+      const frame = await api.createConnectFrame(nonce, this._token, this._password)
       if (this._ws && this._ws.readyState === WebSocket.OPEN) {
         console.log('[ws] 发送 connect frame')
         this._ws.send(JSON.stringify(frame))
@@ -356,6 +524,7 @@ export class WsClient {
 
   _handleConnectSuccess(payload) {
     this._autoPairAttempts = 0
+    this._authRetryCount = 0
     this._hello = payload || null
     this._snapshot = payload?.snapshot || null
     this._serverVersion = payload?.serverVersion || null
@@ -556,6 +725,45 @@ export class WsClient {
 
   sessionsReset(key) {
     return this.request('sessions.reset', { key })
+  }
+
+  // ===== 4.9: Sessions Compaction =====
+  sessionsCompactionList(key) {
+    return this.request('sessions.compaction.list', { key })
+  }
+
+  sessionsCompactionGet(key, checkpointId) {
+    return this.request('sessions.compaction.get', { key, checkpointId })
+  }
+
+  sessionsCompactionBranch(key, checkpointId) {
+    return this.request('sessions.compaction.branch', { key, checkpointId })
+  }
+
+  sessionsCompactionRestore(key, checkpointId) {
+    return this.request('sessions.compaction.restore', { key, checkpointId })
+  }
+
+  // ===== 4.9: Skills Gateway RPC =====
+  skillsSearch(query, limit) {
+    return this.request('skills.search', { query, limit })
+  }
+
+  skillsDetail(slug) {
+    return this.request('skills.detail', { slug })
+  }
+
+  // ===== 4.9: Approval management =====
+  execApprovalList() {
+    return this.request('exec.approval.list', {})
+  }
+
+  execApprovalGet(id) {
+    return this.request('exec.approval.get', { id })
+  }
+
+  pluginApprovalList() {
+    return this.request('plugin.approval.list', {})
   }
 
   onEvent(callback) {

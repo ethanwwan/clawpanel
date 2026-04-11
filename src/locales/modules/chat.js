@@ -168,4 +168,13 @@ export default {
   hostedApiError: _('API 错误 {code}', 'API Error {code}', 'API 錯誤 {code}'),
   hostedPrefix: _('[托管 Agent] ', '[Hosted Agent] '),
   hostedContextSummary: _('[上下文摘要 - 已压缩 {n} 条历史]', '[Context Summary - compressed {n} history entries]', '[上下文摘要 - 已壓縮 {n} 條歷史]'),
+  compactionHistory: _('压缩历史', 'Compaction History', '壓縮歷史'),
+  compactionLoading: _('加载压缩检查点...', 'Loading compaction checkpoints...', '載入壓縮檢查點...'),
+  compactionEmpty: _('该会话暂无压缩检查点', 'No compaction checkpoints for this session', '該對話暫無壓縮檢查點'),
+  compactionBranch: _('分支', 'Branch', '分支'),
+  compactionRestore: _('恢复', 'Restore', '恢復'),
+  compactionBranchDone: _('已从检查点创建分支会话', 'Branch session created from checkpoint', '已從檢查點建立分支對話'),
+  compactionRestoreDone: _('已恢复到检查点', 'Restored to checkpoint', '已恢復到檢查點'),
+  compactionConfirmRestore: _('确定要恢复到此检查点吗？当前会话内容将被替换。', 'Restore to this checkpoint? Current session content will be replaced.', '確定要恢復到此檢查點嗎？目前對話內容將被替換。'),
+  compactionUnsupported: _('当前 Gateway 版本不支持压缩历史功能，请升级到 OpenClaw 2026.4.9+', 'Compaction history requires OpenClaw 2026.4.9+', '目前 Gateway 版本不支援壓縮歷史功能，請升級到 OpenClaw 2026.4.9+'),
 }
