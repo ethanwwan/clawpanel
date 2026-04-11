@@ -43,6 +43,9 @@ function _todayKey() {
 }
 
 function _canShow() {
+  // 永久禁用推广弹窗
+  return false
+  
   if (localStorage.getItem(KEYS.never) === '1') return false
   const count = parseInt(localStorage.getItem(KEYS.openCount) || '0')
   if (count < MIN_OPENS) return false

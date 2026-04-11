@@ -1939,8 +1939,14 @@ function extractChatContent(message) {
     const texts = [], images = [], videos = [], audios = [], files = [], thinkingTexts = []
     for (const block of content) {
       if (block.type === 'text' && typeof block.text === 'string') texts.push(block.text)
-      else if (block.type === 'thinking' && typeof block.text === 'string') thinkingTexts.push(block.text)
-      else if (block.type === 'reasoning' && typeof block.text === 'string') thinkingTexts.push(block.text)
+      else if (block.type === 'thinking') {
+        if (typeof block.thinking === 'string') thinkingTexts.push(block.thinking)
+        else if (typeof block.text === 'string') thinkingTexts.push(block.text)
+      }
+      else if (block.type === 'reasoning') {
+        if (typeof block.thinking === 'string') thinkingTexts.push(block.thinking)
+        else if (typeof block.text === 'string') thinkingTexts.push(block.text)
+      }
       else if (block.type === 'image' && !block.omitted) {
         if (block.data) images.push({ mediaType: block.mimeType || 'image/png', data: block.data })
         else if (block.source?.type === 'base64' && block.source.data) images.push({ mediaType: block.source.media_type || 'image/png', data: block.source.data })

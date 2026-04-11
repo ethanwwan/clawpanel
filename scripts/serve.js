@@ -20,6 +20,7 @@ import { _initApi, _apiMiddleware } from './dev-api.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DIST_DIR = path.resolve(__dirname, '..', 'dist')
+const SRC_DIR = path.resolve(__dirname, '..', 'src')
 
 // === 解析命令行参数 ===
 function parseArgs() {
@@ -82,6 +83,8 @@ const MIME_TYPES = {
 function serveStatic(req, res) {
   // URL 去掉 query string
   const urlPath = req.url.split('?')[0]
+  
+  // 尝试从 dist 目录提供服务
   let filePath = path.join(DIST_DIR, urlPath === '/' ? 'index.html' : urlPath)
 
   // 安全检查：不允许目录遍历
@@ -95,6 +98,35 @@ function serveStatic(req, res) {
   fs.stat(filePath, (err, stats) => {
     if (!err && stats.isFile()) {
       sendFile(res, filePath)
+      return
+    }
+
+    // 如果 dist 目录不存在，尝试从 src 目录提供服务
+    if (!fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
+      let srcFilePath = path.join(SRC_DIR, urlPath === '/' ? '../index.html' : urlPath)
+      
+      // 安全检查：不允许目录遍历
+      if (!srcFilePath.startsWith(SRC_DIR)) {
+        res.statusCode = 403
+        res.end('Forbidden')
+        return
+      }
+      
+      fs.stat(srcFilePath, (srcErr, srcStats) => {
+        if (!srcErr && srcStats.isFile()) {
+          sendFile(res, srcFilePath)
+          return
+        }
+        
+        // SPA fallback：非 API、非静态资源 → index.html
+        const ext = path.extname(urlPath)
+        if (!ext || ext === '.html') {
+          sendFile(res, path.join(SRC_DIR, '../index.html'))
+        } else {
+          res.statusCode = 404
+          res.end('Not Found')
+        }
+      })
       return
     }
 
@@ -126,10 +158,17 @@ function sendFile(res, filePath) {
 
 // === 启动服务器 ===
 async function main() {
-  // 检查 dist 目录
-  if (!fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
-    console.error('❌ 未找到 dist/index.html，请先运行: npm run build')
+  // 检查前端文件
+  if (!fs.existsSync(path.join(DIST_DIR, 'index.html')) && !fs.existsSync(path.join(SRC_DIR, '../index.html'))) {
+    console.error('❌ 未找到前端文件，请先运行: npm run build')
     process.exit(1)
+  }
+  
+  // 提示使用的目录
+  if (!fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
+    console.log('⚠️  未找到 dist 目录，使用 src 目录提供服务（开发模式）')
+  } else {
+    console.log('✅ 使用 dist 目录提供服务（生产模式）')
   }
 
   const { host, port } = parseArgs()
