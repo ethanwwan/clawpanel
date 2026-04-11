@@ -235,6 +235,8 @@ function readVersionFromInstallation(cliPath) {
   if (!resolved || !fs.existsSync(resolved)) return null
   const dir = path.dirname(resolved)
   const versionFile = path.join(dir, 'VERSION')
+  
+  // 1. 查找 VERSION 文件
   try {
     if (fs.existsSync(versionFile)) {
       const lines = fs.readFileSync(versionFile, 'utf8').split(/\r?\n/)
@@ -246,6 +248,17 @@ function readVersionFromInstallation(cliPath) {
       }
     }
   } catch {}
+  
+  // 2. 直接在当前目录查找 package.json（适用于符号链接指向的实际文件目录）
+  try {
+    const pkgPath = path.join(dir, 'package.json')
+    if (fs.existsSync(pkgPath)) {
+      const version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
+      if (version) return version
+    }
+  } catch {}
+  
+  // 3. 查找 node_modules 目录
   const cliSource = classifyCliSource(resolved)
   const pkgNames = (cliSource === 'standalone' || cliSource === 'npm-zh')
     ? [path.join('@qingchencloud', 'openclaw-zh'), 'openclaw']
@@ -263,6 +276,25 @@ function readVersionFromInstallation(cliPath) {
       } catch {}
     }
   }
+  
+  // 4. 特殊处理 Homebrew 安装
+  if (isMac) {
+    try {
+      // ARM Homebrew
+      const brewPkgPath = '/opt/homebrew/lib/node_modules/openclaw/package.json'
+      if (fs.existsSync(brewPkgPath)) {
+        const version = JSON.parse(fs.readFileSync(brewPkgPath, 'utf8')).version
+        if (version) return version
+      }
+      // Intel Homebrew
+      const intelBrewPkgPath = '/usr/local/lib/node_modules/openclaw/package.json'
+      if (fs.existsSync(intelBrewPkgPath)) {
+        const version = JSON.parse(fs.readFileSync(intelBrewPkgPath, 'utf8')).version
+        if (version) return version
+      }
+    } catch {}
+  }
+  
   return null
 }
 
@@ -382,6 +414,30 @@ function readBoundOpenclawCliPath() {
 function resolveOpenclawCliPath() {
   const bound = readBoundOpenclawCliPath()
   if (bound) return bound
+  
+  // 1. 首先检查配置文件中的路径
+  const panelConfig = readPanelConfig()
+  const customCliPath = panelConfig?.openclawCliPath || ''
+  if (customCliPath && fs.existsSync(customCliPath)) {
+    return customCliPath
+  }
+  
+  // 2. 直接检查常见路径，特别是 Homebrew 路径
+  const commonPaths = [
+    '/opt/homebrew/bin/openclaw',  // ARM Homebrew
+    '/usr/local/bin/openclaw',     // Intel Homebrew
+    path.join(homedir(), '.openclaw-bin', 'openclaw'),
+    path.join(homedir(), '.npm-global', 'bin', 'openclaw'),
+    path.join(homedir(), '.local', 'bin', 'openclaw'),
+  ]
+  
+  for (const path of commonPaths) {
+    if (fs.existsSync(path)) {
+      return path
+    }
+  }
+  
+  // 3. 最后尝试收集其他候选路径
   return collectPreferredCliCandidates()[0] || null
 }
 
@@ -1098,60 +1154,59 @@ function detectInstalledSource() {
 }
 
 function getLocalOpenclawVersion() {
-  let current = readVersionFromInstallation(resolveOpenclawCliPath())
+  // 1. 首先尝试从配置的路径读取
+  const panelConfig = readPanelConfig()
+  const customCliPath = panelConfig?.openclawCliPath || ''
+  if (customCliPath && fs.existsSync(customCliPath)) {
+    const version = readVersionFromInstallation(customCliPath)
+    if (version) return version
+  }
+  
+  // 2. 尝试从常见路径读取
+  const commonPaths = [
+    '/opt/homebrew/bin/openclaw',
+    '/usr/local/bin/openclaw',
+    path.join(homedir(), '.openclaw-bin', 'openclaw'),
+    path.join(homedir(), '.npm-global', 'bin', 'openclaw'),
+    path.join(homedir(), '.local', 'bin', 'openclaw'),
+  ]
+  
+  for (const cliPath of commonPaths) {
+    if (fs.existsSync(cliPath)) {
+      const version = readVersionFromInstallation(cliPath)
+      if (version) return version
+    }
+  }
+  
+  // 3. 直接读取 Homebrew 安装的 package.json
   if (isMac) {
     // ARM Homebrew
     try {
-      const target = fs.readlinkSync('/opt/homebrew/bin/openclaw')
-      const pkgPath = path.resolve('/opt/homebrew/bin', target, '..', 'package.json')
-      current = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
+      const pkgPath = '/opt/homebrew/lib/node_modules/openclaw/package.json'
+      if (fs.existsSync(pkgPath)) {
+        const version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
+        if (version) return version
+      }
     } catch {}
     // Intel Homebrew
-    if (!current) {
-      try {
-        const target = fs.readlinkSync('/usr/local/bin/openclaw')
-        const pkgPath = path.resolve('/usr/local/bin', target, '..', 'package.json')
-        current = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
-      } catch {}
-    }
-    // standalone
-    if (!current) {
-      try {
-        const saDir = standaloneInstallDir()
-        const vf = path.join(saDir, 'VERSION')
-        if (fs.existsSync(vf)) {
-          const lines = fs.readFileSync(vf, 'utf8').split('\n')
-          for (const l of lines) { if (l.startsWith('openclaw_version=')) { current = l.split('=')[1]?.trim(); break } }
-        }
-        if (!current) {
-          const pkg = path.join(saDir, 'node_modules', '@qingchencloud', 'openclaw-zh', 'package.json')
-          if (fs.existsSync(pkg)) current = JSON.parse(fs.readFileSync(pkg, 'utf8')).version
-        }
-      } catch {}
-    }
-  }
-  if (!current && isWindows) {
     try {
-      const npmPrefix = readWindowsNpmGlobalPrefix()
-      if (npmPrefix) {
-        for (const pkg of [path.join('@qingchencloud', 'openclaw-zh'), 'openclaw']) {
-          const pkgPath = path.join(npmPrefix, 'node_modules', pkg, 'package.json')
-          if (fs.existsSync(pkgPath)) {
-            current = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
-            if (current) break
-          }
-        }
+      const pkgPath = '/usr/local/lib/node_modules/openclaw/package.json'
+      if (fs.existsSync(pkgPath)) {
+        const version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
+        if (version) return version
       }
     } catch {}
   }
-  if (!current) {
-    try {
-      const result = spawnOpenclawSync(['--version'], { timeout: 5000, windowsHide: true, encoding: 'utf8', cwd: homedir() })
-      const output = openclawResultOutput(result)
-      current = output.trim().split(/\s+/).find(w => /^\d/.test(w)) || null
-    } catch {}
-  }
-  return current || null
+  
+  // 4. 作为最后的尝试，尝试执行命令
+  try {
+    const result = spawnOpenclawSync(['--version'], { timeout: 5000, windowsHide: true, encoding: 'utf8', cwd: homedir() })
+    const output = openclawResultOutput(result)
+    const version = output.trim().split(/\s+/).find(w => /^\d/.test(w)) || null
+    if (version) return version
+  } catch {}
+  
+  return null
 }
 
 async function getLatestVersionFor(source = 'chinese') {
@@ -1256,7 +1311,13 @@ function readPanelConfig() {
       applyOpenclawPathConfig(_panelConfigCache)
       return JSON.parse(JSON.stringify(_panelConfigCache))
     }
-  } catch {}
+  } catch (error) {
+    const errorMsg = String(error.message || error)
+    if (errorMsg.includes('EPERM')) {
+      console.warn(`[api] 读取面板配置失败（权限错误）: ${PANEL_CONFIG_PATH}`)
+      console.warn('[api] 请检查目录权限或使用 sudo 运行')
+    }
+  }
   applyOpenclawPathConfig({})
   return {}
 }
@@ -4491,12 +4552,42 @@ const handlers = {
   },
 
   check_node() {
+    const panelConfig = readPanelConfig()
+    const customNodePath = panelConfig?.customNodePath || ''
+    
+    if (customNodePath && fs.existsSync(customNodePath)) {
+      try {
+        const ver = execSync(`"${customNodePath}" --version 2>&1`, { timeout: 5000, windowsHide: true }).toString().trim()
+        return { installed: true, version: ver, path: customNodePath }
+      } catch {}
+    }
+    
     try {
       const ver = execSync('node --version 2>&1', { windowsHide: true }).toString().trim()
       return { installed: true, version: ver, path: findCommandPath('node') }
-    } catch {
-      return { installed: false, version: null, path: null }
+    } catch {}
+    
+    const commonPaths = [
+      '/opt/homebrew/opt/node@24/bin/node',
+      '/opt/homebrew/bin/node',
+      '/usr/local/bin/node',
+      '/usr/local/n/versions/node/24.13.1/bin/node',
+      '/usr/local/n/versions/node/22.11.0/bin/node',
+      '/usr/local/Cellar/node/23.3.0/bin/node',
+      path.join(homedir(), '.nvm/versions/node/v24/bin/node'),
+      path.join(homedir(), '.volta/bin/node'),
+    ]
+    
+    for (const nodePath of commonPaths) {
+      if (fs.existsSync(nodePath)) {
+        try {
+          const ver = execSync(`"${nodePath}" --version 2>&1`, { timeout: 5000, windowsHide: true }).toString().trim()
+          return { installed: true, version: ver, path: nodePath }
+        } catch {}
+      }
     }
+    
+    return { installed: false, version: null, path: null }
   },
 
   // 运行时状态摘要（轻量实现：直接读 openclaw.json + 端口检测，不 spawn CLI 进程）
@@ -5788,7 +5879,15 @@ const handlers = {
     }
     const panelDir = path.dirname(PANEL_CONFIG_PATH)
     if (!fs.existsSync(panelDir)) fs.mkdirSync(panelDir, { recursive: true })
-    fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify(nextConfig, null, 2))
+    try {
+      fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify(nextConfig, null, 2))
+    } catch (error) {
+      const errorMsg = String(error.message || error)
+      if (errorMsg.includes('EPERM')) {
+        throw new Error(`配置保存失败（权限错误）: ${PANEL_CONFIG_PATH}\n请检查目录权限，或使用 sudo npm run serve 启动服务`)
+      }
+      throw error
+    }
     invalidateConfigCache()
     applyOpenclawPathConfig(nextConfig)
     return true
@@ -6023,19 +6122,58 @@ const handlers = {
   },
 }
 
+function tryFixPanelConfigPermission() {
+  try {
+    if (!fs.existsSync(PANEL_STATE_DIR)) {
+      fs.mkdirSync(PANEL_STATE_DIR, { recursive: true })
+    }
+    if (!fs.existsSync(PANEL_CONFIG_PATH)) {
+      fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify({}))
+      return { success: true, message: '配置文件已创建' }
+    }
+    try {
+      const fd = fs.openSync(PANEL_CONFIG_PATH, 'r+')
+      fs.closeSync(fd)
+      return { success: true, message: '权限正常' }
+    } catch (openError) {
+      if (openError.message?.includes('EPERM')) {
+        try {
+          fs.readFileSync(PANEL_CONFIG_PATH, 'utf8')
+          return { success: true, message: '只读权限，可读取配置' }
+        } catch (readError) {
+          return { success: false, message: `无法读取配置文件: ${PANEL_CONFIG_PATH}` }
+        }
+      }
+      return { success: false, message: openError.message }
+    }
+  } catch (error) {
+    return { success: false, message: error.message }
+  }
+}
+
 // === Vite 插件 ===
 
 // 初始化：密码检测 + 启动日志 + 定时清理
 function _initApi() {
+  const permResult = tryFixPanelConfigPermission()
+  if (!permResult.success) {
+    console.warn(`[api] ⚠️  配置文件权限问题: ${permResult.message}`)
+    console.warn('[api] ⚠️  请手动修复权限: sudo chown -R $USER:$USER ~/.openclaw/')
+  }
+  
   const cfg = readPanelConfig()
   if (!cfg.accessPassword && !cfg.ignoreRisk) {
-    cfg.accessPassword = '123456'
-    cfg.mustChangePassword = true
-    if (!fs.existsSync(OPENCLAW_DIR)) fs.mkdirSync(OPENCLAW_DIR, { recursive: true })
-    fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify(cfg, null, 2))
-    invalidateConfigCache()
-    console.log('[api] ⚠️  首次启动，默认访问密码: 123456')
-    console.log('[api] ⚠️  首次登录后将强制要求修改密码')
+    try {
+      cfg.accessPassword = '123456'
+      cfg.mustChangePassword = true
+      if (!fs.existsSync(OPENCLAW_DIR)) fs.mkdirSync(OPENCLAW_DIR, { recursive: true })
+      fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify(cfg, null, 2))
+      invalidateConfigCache()
+      console.log('[api] ⚠️  首次启动，默认访问密码: 123456')
+      console.log('[api] ⚠️  首次登录后将强制要求修改密码')
+    } catch (error) {
+      console.warn('[api] ⚠️  无法设置默认密码:', error.message)
+    }
   }
   const pw = getAccessPassword()
   console.log('[api] API 已启动，配置目录:', OPENCLAW_DIR)
