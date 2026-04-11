@@ -61,7 +61,7 @@ let _sessionKey = null, _page = null, _messagesEl = null, _textarea = null
 let _sendBtn = null, _statusDot = null, _typingEl = null, _scrollBtn = null
 let _sessionListEl = null, _cmdPanelEl = null, _attachPreviewEl = null, _fileInputEl = null
 let _modelSelectEl = null
-let _currentAiBubble = null, _currentAiText = '', _currentAiThinking = '', _currentAiImages = [], _currentAiVideos = [], _currentAiAudios = [], _currentAiFiles = [], _currentAiTools = [], _currentRunId = null
+let _currentAiBubble = null, _currentAiText = '', _currentAiImages = [], _currentAiVideos = [], _currentAiAudios = [], _currentAiFiles = [], _currentAiTools = [], _currentRunId = null
 let _isStreaming = false, _isSending = false, _messageQueue = [], _streamStartTime = 0
 let _lastRenderTime = 0, _renderPending = false, _lastHistoryHash = ''
 let _autoScrollEnabled = true, _lastScrollTop = 0, _touchStartY = 0
@@ -1755,15 +1755,8 @@ function handleEvent(msg) {
     }
 
     // thinking 事件（推理/思考）
-    if (stream === 'thinking') {
-      // thinking 内容可能在 data.text 或 data.content 中
-      const thinkingText = data?.text || data?.content || ''
-      if (thinkingText) {
-        _currentAiThinking = _currentAiThinking ? _currentAiThinking + '\n' + thinkingText : thinkingText
-      }
-      if (!_isStreaming) {
-        showTyping(true, t('chat.aiThinking'))
-      }
+    if (stream === 'thinking' && !_isStreaming) {
+      showTyping(true, t('chat.aiThinking'))
     }
 
     // command_output 事件（命令输出增量）
@@ -1851,9 +1844,6 @@ function handleChatEvent(payload) {
     if (c?.audios?.length) _currentAiAudios = c.audios
     if (c?.files?.length) _currentAiFiles = c.files
     if (c?.tools?.length) _currentAiTools = c.tools
-    if (c?.thinking) {
-      _currentAiThinking = c.thinking
-    }
     if (c?.text && c.text.length > _currentAiText.length) {
       showTyping(false)
       if (!_currentAiBubble) {
@@ -1900,9 +1890,7 @@ function handleChatEvent(payload) {
     if (finalAudios.length) _currentAiAudios = finalAudios
     if (finalFiles.length) _currentAiFiles = finalFiles
     if (finalTools.length) _currentAiTools = finalTools
-    const finalThinking = c?.thinking || ''
-    if (finalThinking) _currentAiThinking = finalThinking
-    const hasContent = finalText || finalThinking || _currentAiImages.length || _currentAiVideos.length || _currentAiAudios.length || _currentAiFiles.length || _currentAiTools.length
+    const hasContent = finalText || _currentAiImages.length || _currentAiVideos.length || _currentAiAudios.length || _currentAiFiles.length || _currentAiTools.length
     // 忽略空 final（Gateway 会为一条消息触发多个 run，部分是空 final）
     if (!_currentAiBubble && !hasContent) return
     // 标记 runId 为已处理，防止重复
@@ -1917,17 +1905,11 @@ function handleChatEvent(payload) {
     // 如果流式阶段没有创建 bubble，从 final message 中提取
     if (!_currentAiBubble && hasContent) {
       _currentAiBubble = createStreamBubble()
-      _currentAiText = finalText
     }
+    // 始终更新 _currentAiText，确保最终回答被设置
+    if (finalText) _currentAiText = finalText
     if (_currentAiBubble) {
-      const thinkingHtml = _currentAiThinking
-        ? `<details class="msg-thinking"><summary>💭 ${t('chat.thinking') || '思考过程'}</summary><div class="thinking-content">${escapeHtml(_currentAiThinking)}</div></details>`
-        : ''
-      if (_currentAiText) {
-        _currentAiBubble.innerHTML = thinkingHtml + renderMarkdown(_currentAiText)
-      } else if (thinkingHtml) {
-        _currentAiBubble.innerHTML = thinkingHtml
-      }
+      if (_currentAiText) _currentAiBubble.innerHTML = renderMarkdown(_currentAiText)
       appendImagesToEl(_currentAiBubble, _currentAiImages)
       appendVideosToEl(_currentAiBubble, _currentAiVideos)
       appendAudiosToEl(_currentAiBubble, _currentAiAudios)
@@ -2059,22 +2041,11 @@ function extractChatContent(message) {
     return { text: '', images: [], videos: [], audios: [], files: [], tools }
   }
   const content = message.content
-  if (typeof content === 'string') {
-    const thinking = extractThinking(content)
-    return { text: stripThinkingTags(content), thinking, images: [], videos: [], audios: [], files: [], tools }
-  }
+  if (typeof content === 'string') return { text: stripThinkingTags(content), images: [], videos: [], audios: [], files: [], tools }
   if (Array.isArray(content)) {
-    const texts = [], images = [], videos = [], audios = [], files = [], thinkingTexts = []
+    const texts = [], images = [], videos = [], audios = [], files = []
     for (const block of content) {
       if (block.type === 'text' && typeof block.text === 'string') texts.push(block.text)
-      else if (block.type === 'thinking') {
-        if (typeof block.thinking === 'string') thinkingTexts.push(block.thinking)
-        else if (typeof block.text === 'string') thinkingTexts.push(block.text)
-      }
-      else if (block.type === 'reasoning') {
-        if (typeof block.thinking === 'string') thinkingTexts.push(block.thinking)
-        else if (typeof block.text === 'string') thinkingTexts.push(block.text)
-      }
       else if (block.type === 'image' && !block.omitted) {
         if (block.data) images.push({ mediaType: block.mimeType || 'image/png', data: block.data })
         else if (block.source?.type === 'base64' && block.source.data) images.push({ mediaType: block.source.media_type || 'image/png', data: block.source.data })
@@ -2131,10 +2102,9 @@ function extractChatContent(message) {
       else files.push({ url, name: url.split('/').pop().split('?')[0] || 'file', mimeType: '' })
     }
     const text = texts.length ? stripThinkingTags(texts.join('\n')) : ''
-    const thinking = thinkingTexts.length ? thinkingTexts.join('\n\n') : extractThinking(texts.join('\n'))
-    return { text, thinking, images, videos, audios, files, tools }
+    return { text, images, videos, audios, files, tools }
   }
-  if (typeof message.text === 'string') return { text: stripThinkingTags(message.text), thinking: extractThinking(message.text), images: [], videos: [], audios: [], files: [], tools: [] }
+  if (typeof message.text === 'string') return { text: stripThinkingTags(message.text), images: [], videos: [], audios: [], files: [], tools: [] }
   return null
 }
 
@@ -2159,22 +2129,6 @@ function stripThinkingTags(text) {
     .replace(/Conversation info \(untrusted metadata\):\s*```json[\s\S]*?```\s*/gi, '')
     .replace(/\[Queued messages while agent was busy\]\s*---\s*Queued #\d+\s*/gi, '')
     .trim()
-}
-
-function extractThinking(text) {
-  if (!text) return ''
-  const safe = stripAnsi(text)
-  const matches = []
-  const regex = /<\s*think(?:ing)?\s*>[\s\S]*?<\s*\/\s*think(?:ing)?\s*>/gi
-  let match
-  while ((match = regex.exec(safe)) !== null) {
-    const content = match[0]
-      .replace(/<\s*think(?:ing)?\s*>/gi, '')
-      .replace(/<\s*\/\s*think(?:ing)?\s*>/gi, '')
-      .trim()
-    if (content) matches.push(content)
-  }
-  return matches.join('\n\n')
 }
 
 function normalizeTime(raw) {
@@ -2267,14 +2221,10 @@ function throttledRender() {
 
 function doRender() {
   _lastRenderTime = performance.now()
-  if (!_currentAiBubble) return
-  if (_currentAiThinking) {
-    const thinkingHtml = `<details class="msg-thinking"><summary>💭 ${t('chat.thinking') || '思考过程'}</summary><div class="thinking-content">${escapeHtml(_currentAiThinking)}</div></details>`
-    _currentAiBubble.innerHTML = thinkingHtml + renderMarkdown(_currentAiText || '')
-  } else if (_currentAiText) {
+  if (_currentAiBubble && _currentAiText) {
     _currentAiBubble.innerHTML = renderMarkdown(_currentAiText)
+    scrollToBottom()
   }
-  scrollToBottom()
 }
 
 // ── 响应看门狗：防止页面卡在等待状态 ──
@@ -2421,7 +2371,7 @@ async function loadHistory() {
         if (msg.role === 'user') appendUserMessage(msg.content || '', msg.attachments || null, msgTime)
         else if (msg.role === 'assistant') {
           const images = (msg.attachments || []).filter(a => a.category === 'image').map(a => ({ mediaType: a.mimeType, data: a.content, url: a.url }))
-          appendAiMessage(msg.content || '', msgTime, images, [], [], [], [], '')
+          appendAiMessage(msg.content || '', msgTime, images, [], [], [], [])
         }
       })
       scrollToBottom()
@@ -2444,7 +2394,7 @@ async function loadHistory() {
       saveMessages(result.messages.map(m => {
         const c = extractContent(m)
         const role = (m.role === 'tool' || m.role === 'toolResult') ? 'assistant' : m.role
-        return { id: m.id || uuid(), sessionKey: _sessionKey, role, content: c?.text || '', thinking: c?.thinking || '', timestamp: m.timestamp || Date.now() }
+        return { id: m.id || uuid(), sessionKey: _sessionKey, role, content: c?.text || '', timestamp: m.timestamp || Date.now() }
       }))
       _isLoadingHistory = false
       return
@@ -2464,7 +2414,7 @@ async function loadHistory() {
         if (msg.images?.length && !userAtts.length) hasOmittedImages = true
         appendUserMessage(msg.text, userAtts, msgTime)
       } else if (msg.role === 'assistant') {
-        appendAiMessage(msg.text, msgTime, msg.images, msg.videos, msg.audios, msg.files, msg.tools, msg.thinking || '')
+        appendAiMessage(msg.text, msgTime, msg.images, msg.videos, msg.audios, msg.files, msg.tools)
       }
     })
     if (hasOmittedImages) {
@@ -2473,7 +2423,7 @@ async function loadHistory() {
     saveMessages(result.messages.map(m => {
       const c = extractContent(m)
       const role = (m.role === 'tool' || m.role === 'toolResult') ? 'assistant' : m.role
-      return { id: m.id || uuid(), sessionKey: _sessionKey, role, content: c?.text || '', thinking: c?.thinking || '', timestamp: m.timestamp || Date.now() }
+      return { id: m.id || uuid(), sessionKey: _sessionKey, role, content: c?.text || '', timestamp: m.timestamp || Date.now() }
     }))
     scrollToBottom()
   } catch (e) {
@@ -2536,11 +2486,9 @@ function extractContent(msg) {
     return { text: '', images: [], videos: [], audios: [], files: [], tools }
   }
   if (Array.isArray(msg.content)) {
-    const texts = [], images = [], videos = [], audios = [], files = [], thinkingTexts = []
+    const texts = [], images = [], videos = [], audios = [], files = []
     for (const block of msg.content) {
       if (block.type === 'text' && typeof block.text === 'string') texts.push(block.text)
-      else if (block.type === 'thinking' && typeof block.text === 'string') thinkingTexts.push(block.text)
-      else if (block.type === 'reasoning' && typeof block.text === 'string') thinkingTexts.push(block.text)
       else if (block.type === 'image' && !block.omitted) {
         if (block.data) images.push({ mediaType: block.mimeType || 'image/png', data: block.data })
         else if (block.source?.type === 'base64' && block.source.data) images.push({ mediaType: block.source.media_type || 'image/png', data: block.source.data })
@@ -2595,10 +2543,10 @@ function extractContent(msg) {
       else if (/\.(jpe?g|png|gif|webp|heic|svg)(\?|$)/i.test(url)) images.push({ url, mediaType: 'image/png' })
       else files.push({ url, name: url.split('/').pop().split('?')[0] || 'file', mimeType: '' })
     }
-    return { text: stripThinkingTags(texts.join('\n')), thinking: thinkingTexts.join('\n\n'), images, videos, audios, files, tools }
+    return { text: stripThinkingTags(texts.join('\n')), images, videos, audios, files, tools }
   }
   const text = typeof msg.text === 'string' ? msg.text : (typeof msg.content === 'string' ? msg.content : '')
-  return { text: stripThinkingTags(text), thinking: '', images: [], videos: [], audios: [], files: [], tools }
+  return { text: stripThinkingTags(text), images: [], videos: [], audios: [], files: [], tools }
 }
 
 // ── DOM 操作 ──
@@ -2650,7 +2598,6 @@ function appendUserMessage(text, attachments = [], msgTime) {
 
   if (text) {
     const textNode = document.createElement('div')
-    textNode.className = 'msg-text'
     textNode.textContent = text
     bubble.appendChild(textNode)
   }
@@ -2665,20 +2612,12 @@ function appendUserMessage(text, attachments = [], msgTime) {
   scrollToBottom()
 }
 
-function appendAiMessage(text, msgTime, images, videos, audios, files, tools, thinking) {
+function appendAiMessage(text, msgTime, images, videos, audios, files, tools) {
   const wrap = document.createElement('div')
   wrap.className = 'msg msg-ai'
   const bubble = document.createElement('div')
   bubble.className = 'msg-bubble'
   appendToolsToEl(bubble, tools)
-
-  if (thinking) {
-    const thinkingEl = document.createElement('details')
-    thinkingEl.className = 'msg-thinking'
-    thinkingEl.innerHTML = `<summary>💭 ${t('chat.thinking') || '思考过程'}</summary><div class="thinking-content">${escapeHtml(thinking)}</div>`
-    bubble.appendChild(thinkingEl)
-  }
-
   const textEl = document.createElement('div')
   textEl.className = 'msg-text'
   textEl.innerHTML = renderMarkdown(text || '')
