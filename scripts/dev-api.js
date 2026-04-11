@@ -2459,14 +2459,23 @@ function isCurrentGatewayOwner(owner, pid = null) {
 function writeGatewayOwner(pid = null) {
   const ownerPath = gatewayOwnerFilePath()
   const ownerDir = path.dirname(ownerPath)
-  if (!fs.existsSync(ownerDir)) fs.mkdirSync(ownerDir, { recursive: true })
-  const current = currentGatewayOwnerSignature()
-  fs.writeFileSync(ownerPath, JSON.stringify({
-    ...current,
-    pid: Number.isInteger(pid) && pid > 0 ? pid : null,
-    startedAt: new Date().toISOString(),
-    startedBy: 'clawpanel',
-  }, null, 2))
+  try {
+    if (!fs.existsSync(ownerDir)) fs.mkdirSync(ownerDir, { recursive: true })
+    const current = currentGatewayOwnerSignature()
+    fs.writeFileSync(ownerPath, JSON.stringify({
+      ...current,
+      pid: Number.isInteger(pid) && pid > 0 ? pid : null,
+      startedAt: new Date().toISOString(),
+      startedBy: 'clawpanel',
+    }, null, 2))
+  } catch (e) {
+    const errMsg = String(e.message || e)
+    if (errMsg.includes('EPERM') || errMsg.includes('EACCES')) {
+      console.warn(`[api] 无法写入 gateway-owner.json（权限不足）: ${ownerPath}`)
+    } else {
+      throw e
+    }
+  }
 }
 
 function clearGatewayOwner() {
