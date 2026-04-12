@@ -26,6 +26,7 @@ let _panelConfig = null
 export async function loadPanelConfig() {
   try {
     _panelConfig = await api.get_panel_config()
+    window.__hideQingchenAssistant = _panelConfig?.hideQingchenAssistant === true
   } catch {}
 }
 
