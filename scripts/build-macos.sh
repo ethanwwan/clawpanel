@@ -72,7 +72,7 @@ ok "构建完成"
 # ── 查找 DMG ──────────────────────────────────────────────────────────────────
 
 step "查找 DMG 文件"
-DMG_PATH=$(find src-tauri/target/release/bundle -name "*.dmg" 2>/dev/null | head -1)
+DMG_PATH=$(find src-tauri/target -name "*.dmg" 2>/dev/null | grep -E "aarch64.*dmg|ClawPanel_.*\.dmg$" | head -1)
 if [ -z "$DMG_PATH" ]; then
   fail "未找到 DMG 文件"
 fi
