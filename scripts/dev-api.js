@@ -6317,7 +6317,7 @@ const handlers = {
     return true
   },
 
-  check_panel_update() { return { latest: null, url: 'https://github.com/qingchencloud/clawpanel/releases' } },
+  check_panel_update() { return { latest: null, url: 'https://github.com/ethanwwan/clawpanel/releases' } },
 
   // 前端热更新
   async check_frontend_update() {

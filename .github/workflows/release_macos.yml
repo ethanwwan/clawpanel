@@ -1,0 +1,81 @@
+# ClawPanel macOS (Apple Silicon) 构建工作流
+# 推送 v* 标签时自动构建 DMG 安装包
+name: Release macOS
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: '发布版本号 (例如: v1.0.0)'
+        required: true
+        type: string
+        default: 'v1.0.0'
+
+jobs:
+  build:
+    name: 构建 (macOS Apple Silicon)
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 签出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 设置版本标签
+        id: vars
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TAG_NAME=${{ github.event.inputs.tag_name }}" >> "$GITHUB_ENV"
+          else
+            echo "TAG_NAME=${{ github.ref_name }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: 设置执行权限
+        run: chmod +x scripts/build-macos.sh
+
+      - name: 获取版本号
+        id: version
+        shell: bash
+        run: echo "VERSION=${TAG_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: 构建 macOS 应用
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ env.VERSION }}
+        run: ./scripts/build-macos.sh
+
+      - name: 上传 DMG 到 Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: ClawPanel ${{ env.TAG_NAME }}
+          draft: false
+          prerelease: false
+          files: |
+            src-tauri/target/release/bundle/dmg/ClawPanel_${{ env.VERSION }}_aarch64.dmg
+          body: |
+            # 📥 下载安装
+
+            根据你的芯片类型选择对应安装包：
+
+            ## macOS
+
+            | 芯片 | 安装包 |
+            |------|--------|
+            | Apple Silicon (M1/M2/M3/M4) | ClawPanel_${{ env.VERSION }}_aarch64.dmg |
+
+            > **⚠️ 首次打开提示"无法验证开发者"？**
+            > 在终端执行：`sudo xattr -rd com.apple.quarantine /Applications/ClawPanel.app`
+            > 或前往 **系统设置 → 隐私与安全性** 点击「仍要打开」。
+
+            ## 系统要求
+
+            - macOS 10.15+
+            - Apple Silicon (M1/M2/M3/M4)

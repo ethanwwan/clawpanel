@@ -6,13 +6,13 @@
   "type": "module",
   "author": "qingchencloud",
   "license": "AGPL-3.0",
-  "homepage": "https://github.com/qingchencloud/clawpanel",
+  "homepage": "https://github.com/ethanwwan/clawpanel",
   "repository": {
     "type": "git",
-    "url": "https://github.com/qingchencloud/clawpanel.git"
+    "url": "https://github.com/ethanwwan/clawpanel.git"
   },
   "bugs": {
-    "url": "https://github.com/qingchencloud/clawpanel/issues"
+    "url": "https://github.com/ethanwwan/clawpanel/issues"
   },
   "keywords": [
     "openclaw",

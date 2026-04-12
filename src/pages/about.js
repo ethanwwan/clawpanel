@@ -435,10 +435,10 @@ async function checkHotUpdate(cards, panelVersion) {
         <span style="color:var(--accent)">${t('about.newVersion')}: v${ver}</span>
         ${changelog ? `<span style="color:var(--text-tertiary);font-size:var(--font-size-xs)">${changelog}</span>` : ''}
         <a class="btn btn-primary btn-sm" href="https://claw.qt.cool" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromWebsite')}</a>
-        <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/clawpanel/releases" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromGitHub')}</a>
+        <a class="btn btn-secondary btn-sm" href="https://github.com/ethanwwan/clawpanel/releases" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromGitHub')}</a>
       `
     } else if (!info.compatible) {
-      meta.innerHTML = `<span style="color:var(--text-tertiary)">${t('about.needFullUpdate')}</span> <a class="btn btn-primary btn-sm" href="https://claw.qt.cool" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromWebsite')}</a> <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/clawpanel/releases" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromGitHub')}</a>`
+      meta.innerHTML = `<span style="color:var(--text-tertiary)">${t('about.needFullUpdate')}</span> <a class="btn btn-primary btn-sm" href="https://claw.qt.cool" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromWebsite')}</a> <a class="btn btn-secondary btn-sm" href="https://github.com/ethanwwan/clawpanel/releases" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromGitHub')}</a>`
     } else {
       meta.innerHTML = `<span style="color:var(--success)">${t('about.upToDate')}</span>`
     }
@@ -515,7 +515,7 @@ const PROJECTS = [
   {
     name: 'ClawPanel',
     desc: t('about.projectClawPanel'),
-    url: 'https://github.com/qingchencloud/clawpanel',
+    url: 'https://github.com/ethanwwan/clawpanel',
     gitee: 'https://gitee.com/QtCodeCreators/clawpanel',
   },
   {
@@ -562,10 +562,10 @@ function renderContribute(page) {
       ${t('about.contributeDesc')}
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:8px">
-      <a class="btn btn-primary btn-sm" href="https://github.com/qingchencloud/clawpanel/issues/new" target="_blank" rel="noopener">${t('about.submitIssue')}</a>
-      <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/clawpanel/pulls" target="_blank" rel="noopener">${t('about.submitPR')}</a>
-      <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/clawpanel/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">${t('about.contributeGuide')}</a>
-      <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/clawpanel/issues" target="_blank" rel="noopener">${t('about.viewIssues')}</a>
+      <a class="btn btn-primary btn-sm" href="https://github.com/ethanwwan/clawpanel/issues/new" target="_blank" rel="noopener">${t('about.submitIssue')}</a>
+      <a class="btn btn-secondary btn-sm" href="https://github.com/ethanwwan/clawpanel/pulls" target="_blank" rel="noopener">${t('about.submitPR')}</a>
+      <a class="btn btn-secondary btn-sm" href="https://github.com/ethanwwan/clawpanel/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">${t('about.contributeGuide')}</a>
+      <a class="btn btn-secondary btn-sm" href="https://github.com/ethanwwan/clawpanel/issues" target="_blank" rel="noopener">${t('about.viewIssues')}</a>
     </div>
     <div style="margin-top:8px;font-size:var(--font-size-xs);color:var(--text-tertiary)">
       ${t('about.domesticMirrorHint')}
