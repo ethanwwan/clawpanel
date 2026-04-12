@@ -15,7 +15,7 @@ import { version as APP_VERSION } from '../package.json'
 import { statusIcon } from './lib/icons.js'
 import { isForeignGatewayError, showGatewayConflictGuidance } from './lib/gateway-ownership.js'
 import { tryShowEngagement } from './components/engagement.js'
-import { isQingchenAssistantHidden } from './lib/feature-gates.js'
+import { isQingchenFeatureAvailable } from './lib/feature-gates.js'
 import { toast } from './components/toast.js'
 import { initI18n, t } from './lib/i18n.js'
 import { initFeatureGates, loadPanelConfig } from './lib/feature-gates.js'
@@ -408,7 +408,7 @@ async function boot() {
         if (running) {
           autoConnectWebSocket()
           // 正向时机：Gateway 启动成功，延迟弹社区引导（晴辰助手开关关闭时显示）
-          if (!isQingchenAssistantHidden()) {
+          if (isQingchenFeatureAvailable()) {
             setTimeout(tryShowEngagement, 5000)
           }
         } else {

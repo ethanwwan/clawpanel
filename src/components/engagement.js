@@ -66,7 +66,7 @@ let _showing = false
  * 满足条件才弹出，否则静默返回
  */
 export function tryShowEngagement() {
-  if (window.__hideQingchenAssistant) return
+  if (!window.__qingchenFeatureAvailable) return
   if (_showing || !_canShow()) return
   if (document.querySelector('.engage-overlay')) return
   _showing = true
