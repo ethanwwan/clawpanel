@@ -26,12 +26,12 @@ let _panelConfig = null
 export async function loadPanelConfig() {
   try {
     _panelConfig = await api.get_panel_config()
-    window.__qingchenFeatureAvailable = !(_panelConfig?.hideQingchenAssistant === true)
+    window.__qingchenFeatureAvailable = _panelConfig?.qingchenFeatureAvailable !== false
   } catch {}
 }
 
 export function isQingchenFeatureAvailable() {
-  return !(_panelConfig?.hideQingchenAssistant === true)
+  return _panelConfig?.qingchenFeatureAvailable !== false
 }
 
 let _cachedVersion = null

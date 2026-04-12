@@ -6119,11 +6119,11 @@ const handlers = {
         delete nextConfig[key]
       }
     }
-    // 晴辰助手功能开关（隐藏广告模块）
-    if (typeof nextConfig.hideQingchenAssistant === 'boolean') {
+    // 晴辰助手功能开关
+    if (typeof nextConfig.qingchenFeatureAvailable === 'boolean') {
       // 允许显式设置 true/false
     } else {
-      delete nextConfig.hideQingchenAssistant
+      delete nextConfig.qingchenFeatureAvailable
     }
     const panelDir = path.dirname(PANEL_CONFIG_PATH)
     if (!fs.existsSync(panelDir)) fs.mkdirSync(panelDir, { recursive: true })
