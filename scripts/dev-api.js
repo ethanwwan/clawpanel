@@ -6119,7 +6119,7 @@ const handlers = {
         delete nextConfig[key]
       }
     }
-    // 晴辰助手功能开关
+    // Claw助手功能开关
     if (typeof nextConfig.qingchenFeatureAvailable === 'boolean') {
       // 允许显式设置 true/false
     } else {
