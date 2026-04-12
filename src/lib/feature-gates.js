@@ -21,6 +21,18 @@ const FEATURE_MIN_VERSIONS = {
   memory: '0.8.0',
 }
 
+let _panelConfig = null
+
+export async function loadPanelConfig() {
+  try {
+    _panelConfig = await api.get_panel_config()
+  } catch {}
+}
+
+export function isQingchenAssistantHidden() {
+  return _panelConfig?.hideQingchenAssistant === true
+}
+
 let _cachedVersion = null
 let _cacheTime = 0
 const CACHE_TTL = 60000

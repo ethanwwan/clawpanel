@@ -14,10 +14,11 @@ import { api, checkBackendHealth, isBackendOnline, isTauriRuntime, onBackendStat
 import { version as APP_VERSION } from '../package.json'
 import { statusIcon } from './lib/icons.js'
 import { isForeignGatewayError, showGatewayConflictGuidance } from './lib/gateway-ownership.js'
-// import { tryShowEngagement } from './components/engagement.js'
+import { tryShowEngagement } from './components/engagement.js'
+import { isQingchenAssistantHidden } from './lib/feature-gates.js'
 import { toast } from './components/toast.js'
 import { initI18n, t } from './lib/i18n.js'
-import { initFeatureGates } from './lib/feature-gates.js'
+import { initFeatureGates, loadPanelConfig } from './lib/feature-gates.js'
 
 // 样式
 import './style/variables.css'
@@ -386,7 +387,7 @@ async function boot() {
       }).catch(() => {})
     : Promise.resolve()
 
-  ensureWebSession.then(() => loadActiveInstance()).then(() => detectOpenclawStatus()).then(() => initFeatureGates().catch(() => {})).then(() => {
+  ensureWebSession.then(() => loadActiveInstance()).then(() => detectOpenclawStatus()).then(() => loadPanelConfig().catch(() => {})).then(() => initFeatureGates().catch(() => {})).then(() => {
     // 重新渲染侧边栏（检测完成后 isOpenclawReady + 功能门控状态已更新）
     renderSidebar(sidebar)
     if (!isOpenclawReady()) {
@@ -406,8 +407,10 @@ async function boot() {
       onGatewayChange((running) => {
         if (running) {
           autoConnectWebSocket()
-          // 正向时机：Gateway 启动成功，延迟弹社区引导
-          // setTimeout(tryShowEngagement, 5000)
+          // 正向时机：Gateway 启动成功，延迟弹社区引导（晴辰助手开关关闭时显示）
+          if (!isQingchenAssistantHidden()) {
+            setTimeout(tryShowEngagement, 5000)
+          }
         } else {
           wsClient.disconnect()
         }

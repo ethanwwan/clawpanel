@@ -6095,6 +6095,12 @@ const handlers = {
     return readPanelConfig()
   },
 
+  get_panel_config({ key }) {
+    const config = readPanelConfig()
+    if (key) return config[key]
+    return config
+  },
+
   write_panel_config({ config }) {
     const nextConfig = config && typeof config === 'object' ? { ...config } : {}
     if (typeof nextConfig.openclawDir === 'string') {
@@ -6112,6 +6118,12 @@ const handlers = {
       } else if (nextConfig[key] == null) {
         delete nextConfig[key]
       }
+    }
+    // 晴辰助手功能开关（隐藏广告模块）
+    if (typeof nextConfig.hideQingchenAssistant === 'boolean') {
+      // 允许显式设置 true/false
+    } else {
+      delete nextConfig.hideQingchenAssistant
     }
     const panelDir = path.dirname(PANEL_CONFIG_PATH)
     if (!fs.existsSync(panelDir)) fs.mkdirSync(panelDir, { recursive: true })
