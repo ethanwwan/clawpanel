@@ -19,6 +19,7 @@ pub mod config;
 pub mod device;
 pub mod diagnose;
 pub mod extensions;
+pub mod hermes;
 pub mod logs;
 pub mod memory;
 pub mod messaging;
@@ -28,9 +29,54 @@ pub mod skillhub;
 pub mod skills;
 pub mod update;
 
-/// 默认 OpenClaw 配置目录（ClawPanel 自身配置始终在此）
+/// 默认 OpenClaw 配置目录
+/// Windows 上优先使用 USERPROFILE（与 Node.js os.homedir() 一致），
+/// 并自动检测已有 openclaw.json 的目录，避免创建第二个 .openclaw
 fn default_openclaw_dir() -> PathBuf {
-    dirs::home_dir().unwrap_or_default().join(".openclaw")
+    #[cfg(target_os = "windows")]
+    {
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        // 优先 USERPROFILE（与 Node.js os.homedir() 一致）
+        if let Ok(up) = std::env::var("USERPROFILE") {
+            let p = PathBuf::from(up.trim());
+            if !p.as_os_str().is_empty() {
+                candidates.push(p);
+            }
+        }
+        // dirs::home_dir() 作为补充（Windows API SHGetKnownFolderPath）
+        if let Some(dh) = dirs::home_dir() {
+            if !candidates.iter().any(|c| panel_path_key(c) == panel_path_key(&dh)) {
+                candidates.push(dh);
+            }
+        }
+        // HOMEDRIVE+HOMEPATH（域控/企业环境可能指向网络盘）
+        if let (Ok(hd), Ok(hp)) = (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
+            let combined = format!("{}{}", hd.trim(), hp.trim());
+            let p = PathBuf::from(&combined);
+            if !combined.is_empty()
+                && !candidates.iter().any(|c| panel_path_key(c) == panel_path_key(&p))
+            {
+                candidates.push(p);
+            }
+        }
+        // 优先选已有 openclaw.json 的目录（自动对齐已安装的 OpenClaw）
+        for home in &candidates {
+            let dir = home.join(".openclaw");
+            if dir.join("openclaw.json").exists() {
+                return dir;
+            }
+        }
+        // 都没有 → 用第一个候选（USERPROFILE）
+        candidates
+            .first()
+            .cloned()
+            .unwrap_or_default()
+            .join(".openclaw")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        dirs::home_dir().unwrap_or_default().join(".openclaw")
+    }
 }
 
 fn panel_path_key(path: &std::path::Path) -> String {

@@ -120,6 +120,25 @@ fn put_csv_array_from_form(entry: &mut Map<String, Value>, key: &str, raw: &str)
     }
 }
 
+/// 合并渠道配置：将新的表单字段覆盖到现有配置上，保留用户通过 CLI 或手动编辑的自定义字段。
+/// 例如用户手动添加的 streaming / retry / dmPolicy 等不会被丢弃。
+fn merge_channel_entry(
+    channels_map: &mut Map<String, Value>,
+    key: &str,
+    new_entry: Map<String, Value>,
+) {
+    let merged = if let Some(Value::Object(existing)) = channels_map.get(key) {
+        let mut m = existing.clone();
+        for (k, v) in new_entry {
+            m.insert(k, v);
+        }
+        m
+    } else {
+        new_entry
+    };
+    channels_map.insert(key.to_string(), Value::Object(merged));
+}
+
 fn normalize_binding_match_value(value: &Value) -> Option<Value> {
     match value {
         Value::Null => None,
@@ -636,17 +655,6 @@ pub async fn save_messaging_platform(
                 entry.insert("token".into(), Value::String(t.trim().into()));
             }
             entry.insert("enabled".into(), Value::Bool(true));
-            entry.insert("groupPolicy".into(), Value::String("allowlist".into()));
-            entry.insert("dm".into(), json!({ "enabled": false }));
-            entry.insert(
-                "retry".into(),
-                json!({
-                    "attempts": 3,
-                    "minDelayMs": 500,
-                    "maxDelayMs": 30000,
-                    "jitter": 0.1
-                }),
-            );
 
             // guildId + channelId 展开为 guilds 嵌套结构
             let guild_id = form_obj
@@ -681,7 +689,19 @@ pub async fn save_messaging_platform(
                 );
             }
 
-            channels_map.insert("discord".into(), Value::Object(entry));
+            // 合并到现有配置，保留用户通过 CLI 设置的 streaming / retry / dmPolicy 等
+            merge_channel_entry(channels_map, "discord", entry);
+            // 仅在首次创建时设置默认值，不覆盖用户已有的设置
+            if let Some(Value::Object(d)) = channels_map.get_mut("discord") {
+                d.entry("groupPolicy").or_insert(Value::String("allowlist".into()));
+                d.entry("dm").or_insert(json!({ "enabled": false }));
+                d.entry("retry").or_insert(json!({
+                    "attempts": 3,
+                    "minDelayMs": 500,
+                    "maxDelayMs": 30000,
+                    "jitter": 0.1
+                }));
+            }
         }
         "telegram" => {
             let mut entry = Map::new();
@@ -704,7 +724,7 @@ pub async fn save_messaging_platform(
                 }
             }
 
-            channels_map.insert("telegram".into(), Value::Object(entry));
+            merge_channel_entry(channels_map, "telegram", entry);
         }
         "qqbot" => {
             let app_id = form_obj
@@ -808,10 +828,10 @@ pub async fn save_messaging_platform(
                     let accounts_obj = accounts.as_object_mut().ok_or("accounts 格式错误")?;
                     accounts_obj.insert(acct.clone(), Value::Object(entry));
                 } else {
-                    channels_map.insert(storage_key.clone(), Value::Object(entry));
+                    merge_channel_entry(channels_map, &storage_key, entry);
                 }
             } else {
-                channels_map.insert(storage_key.clone(), Value::Object(entry));
+                merge_channel_entry(channels_map, &storage_key, entry);
             }
             ensure_plugin_allowed(&mut cfg, "openclaw-lark")?;
             // 禁用旧版 feishu 插件，防止新旧插件同时运行冲突
@@ -863,7 +883,7 @@ pub async fn save_messaging_platform(
                 );
             }
 
-            channels_map.insert(storage_key, Value::Object(entry));
+            merge_channel_entry(channels_map, &storage_key, entry);
             ensure_plugin_allowed(&mut cfg, "dingtalk-connector")?;
             ensure_chat_completions_enabled(&mut cfg)?;
             let _ = cleanup_legacy_plugin_backup_dir("dingtalk-connector");
@@ -912,7 +932,7 @@ pub async fn save_messaging_platform(
                 form_string(form_obj, "groupPolicy"),
             );
             put_csv_array_from_form(&mut entry, "allowFrom", &form_string(form_obj, "allowFrom"));
-            channels_map.insert(storage_key, Value::Object(entry));
+            merge_channel_entry(channels_map, &storage_key, entry);
         }
         "whatsapp" => {
             let mut entry = Map::new();
@@ -925,7 +945,7 @@ pub async fn save_messaging_platform(
             );
             put_csv_array_from_form(&mut entry, "allowFrom", &form_string(form_obj, "allowFrom"));
             put_bool_from_form(&mut entry, "enabled", &form_string(form_obj, "enabled"));
-            channels_map.insert(storage_key, Value::Object(entry));
+            merge_channel_entry(channels_map, &storage_key, entry);
         }
         "signal" => {
             let account = form_string(form_obj, "account");
@@ -947,7 +967,7 @@ pub async fn save_messaging_platform(
                 form_string(form_obj, "groupPolicy"),
             );
             put_csv_array_from_form(&mut entry, "allowFrom", &form_string(form_obj, "allowFrom"));
-            channels_map.insert(storage_key, Value::Object(entry));
+            merge_channel_entry(channels_map, &storage_key, entry);
         }
         "matrix" => {
             let homeserver = form_string(form_obj, "homeserver");
@@ -977,7 +997,7 @@ pub async fn save_messaging_platform(
             );
             put_bool_from_form(&mut entry, "e2ee", &form_string(form_obj, "e2ee"));
             put_csv_array_from_form(&mut entry, "allowFrom", &form_string(form_obj, "allowFrom"));
-            channels_map.insert(storage_key, Value::Object(entry));
+            merge_channel_entry(channels_map, &storage_key, entry);
             ensure_plugin_allowed(&mut cfg, "matrix")?;
         }
         "msteams" => {
@@ -1009,7 +1029,7 @@ pub async fn save_messaging_platform(
                 form_string(form_obj, "groupPolicy"),
             );
             put_csv_array_from_form(&mut entry, "allowFrom", &form_string(form_obj, "allowFrom"));
-            channels_map.insert(storage_key, Value::Object(entry));
+            merge_channel_entry(channels_map, &storage_key, entry);
             ensure_plugin_allowed(&mut cfg, "msteams")?;
         }
         _ => {
@@ -1019,7 +1039,7 @@ pub async fn save_messaging_platform(
                 entry.insert(k.clone(), v.clone());
             }
             entry.insert("enabled".into(), Value::Bool(true));
-            channels_map.insert(storage_key, Value::Object(entry));
+            merge_channel_entry(channels_map, &storage_key, entry);
         }
     }
 
@@ -2219,7 +2239,6 @@ pub async fn toggle_plugin(plugin_id: String, enabled: bool) -> Result<Value, St
         return Err("plugin_id 不能为空".into());
     }
 
-    let config_path = super::openclaw_dir().join("openclaw.json");
     let mut cfg = super::config::load_openclaw_json().unwrap_or_else(|_| json!({}));
 
     if enabled {
@@ -2228,8 +2247,8 @@ pub async fn toggle_plugin(plugin_id: String, enabled: bool) -> Result<Value, St
         disable_legacy_plugin(&mut cfg, plugin_id);
     }
 
-    let content = serde_json::to_string_pretty(&cfg).map_err(|e| format!("序列化失败: {e}"))?;
-    std::fs::write(&config_path, content).map_err(|e| format!("写入配置失败: {e}"))?;
+    // 使用 save_openclaw_json 写入（含备份和 UI 字段清理），而非直接 fs::write
+    super::config::save_openclaw_json(&cfg)?;
 
     Ok(json!({ "ok": true, "enabled": enabled, "pluginId": plugin_id }))
 }

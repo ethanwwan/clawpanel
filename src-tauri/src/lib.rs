@@ -4,8 +4,8 @@ mod tray;
 mod utils;
 
 use commands::{
-    agent, assistant, config, device, diagnose, extensions, logs, memory, messaging, pairing,
-    service, skills, update,
+    agent, assistant, config, device, diagnose, extensions, hermes, logs, memory, messaging,
+    pairing, service, skills, update,
 };
 
 pub fn run() {
@@ -215,6 +215,22 @@ pub fn run() {
             update::download_frontend_update,
             update::rollback_frontend_update,
             update::get_update_status,
+            // Hermes Agent 管理
+            hermes::check_python,
+            hermes::check_hermes,
+            hermes::install_hermes,
+            hermes::configure_hermes,
+            hermes::hermes_gateway_action,
+            hermes::hermes_health_check,
+            hermes::hermes_api_proxy,
+            hermes::hermes_agent_run,
+            hermes::hermes_read_config,
+            hermes::hermes_fetch_models,
+            hermes::hermes_update_model,
+            hermes::hermes_detect_environments,
+            hermes::hermes_set_gateway_url,
+            hermes::update_hermes,
+            hermes::uninstall_hermes,
         ])
         .on_window_event(|window, event| {
             // 关闭窗口时最小化到托盘，不退出应用

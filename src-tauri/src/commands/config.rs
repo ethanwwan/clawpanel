@@ -1339,10 +1339,8 @@ pub fn calibrate_openclaw_config(mode: String) -> Result<Value, String> {
 ///
 /// Issue #127: 修复配置合并时丢失 browser.* 等合法字段的问题
 ///
-/// 保留的字段：
-/// - `browser.*` - OpenClaw browser profiles
-/// - `agents.list` - OpenClaw agent list
-/// - 其他 OpenClaw schema 定义的字段
+/// 策略：对所有顶级 Object 类型字段做浅合并（新值覆盖旧值，旧值中新配置没有的字段保留）。
+/// 这样用户通过 CLI / 手动编辑添加的自定义子字段不会被前端的部分配置所覆盖掉。
 ///
 /// 清理的字段：
 /// - UI 专属字段（通过 strip_ui_fields 处理）
@@ -1354,27 +1352,22 @@ fn merge_configs_preserving_fields(existing: &Value, new: &Value) -> Value {
             let mut merged = existing_obj.clone();
 
             for (key, new_value) in new_obj {
-                if key == "browser" || key == "agents" {
-                    // 保留现有配置中的 browser 和 agents
-                    // 如果新配置有对应的值且是对象，进行深度合并
-                    if let Some(existing_value) = existing_obj.get(key) {
-                        if let (Value::Object(existing_sub), Value::Object(new_sub)) =
-                            (existing_value, new_value)
-                        {
-                            let mut sub_merged = existing_sub.clone();
-                            for (sub_key, sub_value) in new_sub {
-                                sub_merged.insert(sub_key.clone(), sub_value.clone());
-                            }
-                            merged.insert(key.clone(), Value::Object(sub_merged));
-                        } else {
-                            // 新值不是对象，直接使用新值
-                            merged.insert(key.clone(), new_value.clone());
+                if let Some(existing_value) = existing_obj.get(key) {
+                    if let (Value::Object(existing_sub), Value::Object(new_sub)) =
+                        (existing_value, new_value)
+                    {
+                        // 两边都是对象：浅合并（新值覆盖，旧值保留未覆盖的 key）
+                        let mut sub_merged = existing_sub.clone();
+                        for (sub_key, sub_value) in new_sub {
+                            sub_merged.insert(sub_key.clone(), sub_value.clone());
                         }
+                        merged.insert(key.clone(), Value::Object(sub_merged));
                     } else {
+                        // 类型不同或不是对象，直接使用新值
                         merged.insert(key.clone(), new_value.clone());
                     }
                 } else {
-                    // 其他字段直接使用新配置的值
+                    // 现有配置没有此 key，使用新值
                     merged.insert(key.clone(), new_value.clone());
                 }
             }
@@ -1703,37 +1696,9 @@ fn sync_providers_to_agent_models(config: &Value) {
                                     }
                                 }
                             }
-                            // 清理已删除的 models
-                            if let Some(dst_models) =
-                                dst_obj.get_mut("models").and_then(|m| m.as_array_mut())
-                            {
-                                let src_model_ids: std::collections::HashSet<String> = src_provider
-                                    .get("models")
-                                    .and_then(|m| m.as_array())
-                                    .map(|arr| {
-                                        arr.iter()
-                                            .filter_map(|m| {
-                                                m.get("id")
-                                                    .and_then(|v| v.as_str())
-                                                    .or_else(|| m.as_str())
-                                                    .map(|s| s.to_string())
-                                            })
-                                            .collect()
-                                    })
-                                    .unwrap_or_default();
-                                let before = dst_models.len();
-                                dst_models.retain(|m| {
-                                    let id = m
-                                        .get("id")
-                                        .and_then(|v| v.as_str())
-                                        .or_else(|| m.as_str())
-                                        .unwrap_or("");
-                                    src_model_ids.contains(id)
-                                });
-                                if dst_models.len() != before {
-                                    changed = true;
-                                }
-                            }
+                            // 注意：不删除 agent models.json 中用户手动添加的模型。
+                            // 只同步连接信息（baseUrl/apiKey/api），保留用户通过 CLI
+                            // 或手动编辑添加的自定义模型。
                         }
                     }
                 }

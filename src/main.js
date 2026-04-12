@@ -18,6 +18,9 @@ import { tryShowEngagement } from './components/engagement.js'
 import { toast } from './components/toast.js'
 import { initI18n, t } from './lib/i18n.js'
 import { initFeatureGates } from './lib/feature-gates.js'
+import { registerEngine, initEngineManager, getActiveEngine, getActiveEngineId, onEngineChange } from './lib/engine-manager.js'
+import openclawEngine from './engines/openclaw/index.js'
+import hermesEngine from './engines/hermes/index.js'
 
 // 样式
 import './style/variables.css'
@@ -310,31 +313,12 @@ const sidebar = document.getElementById('sidebar')
 const content = document.getElementById('content')
 
 async function boot() {
-  // 先注册所有路由，立即渲染 UI（不等后端检测）
-  registerRoute('/dashboard', () => import('./pages/dashboard.js'))
-  registerRoute('/chat', () => import('./pages/chat.js'))
-  registerRoute('/chat-debug', () => import('./pages/chat-debug.js'))
-  registerRoute('/services', () => import('./pages/services.js'))
-  registerRoute('/logs', () => import('./pages/logs.js'))
-  registerRoute('/models', () => import('./pages/models.js'))
-  registerRoute('/agents', () => import('./pages/agents.js'))
-  registerRoute('/agent-detail', () => import('./pages/agent-detail.js'))
-  registerRoute('/gateway', () => import('./pages/gateway.js'))
-  registerRoute('/memory', () => import('./pages/memory.js'))
-  registerRoute('/dreaming', () => import('./pages/dreaming.js'))
-  registerRoute('/skills', () => import('./pages/skills.js'))
-  registerRoute('/security', () => import('./pages/security.js'))
-  registerRoute('/about', () => import('./pages/about.js'))
-  registerRoute('/assistant', () => import('./pages/assistant.js'))
-  registerRoute('/setup', () => import('./pages/setup.js'))
-  registerRoute('/channels', () => import('./pages/channels.js'))
-  registerRoute('/cron', () => import('./pages/cron.js'))
-  registerRoute('/usage', () => import('./pages/usage.js'))
-  registerRoute('/communication', () => import('./pages/communication.js'))
-  registerRoute('/settings', () => import('./pages/settings.js'))
-  registerRoute('/route-map', () => import('./pages/route-map.js'))
-  registerRoute('/plugin-hub', () => import('./pages/plugin-hub.js'))
-  registerRoute('/diagnose', () => import('./pages/chat-debug.js'))
+  // 注册引擎
+  registerEngine(openclawEngine)
+  registerEngine(hermesEngine)
+
+  // 初始化引擎管理器：读取 clawpanel.json 的 engineMode，注册对应路由
+  await initEngineManager()
 
   renderSidebar(sidebar)
   initRouter(content)
@@ -386,63 +370,85 @@ async function boot() {
       }).catch(() => {})
     : Promise.resolve()
 
-  ensureWebSession.then(() => loadActiveInstance()).then(() => detectOpenclawStatus()).then(() => initFeatureGates().catch(() => {})).then(() => {
-    // 重新渲染侧边栏（检测完成后 isOpenclawReady + 功能门控状态已更新）
+  ensureWebSession.then(() => getActiveEngineId() === 'openclaw' ? loadActiveInstance() : Promise.resolve()).then(async () => {
+    const engine = getActiveEngine()
+    if (!engine) return
+
+    // 引擎启动（检测安装状态 + 初始化轮询等）
+    await engine.boot()
+
+    // 重新渲染侧边栏（引擎检测完成后状态已更新）
     renderSidebar(sidebar)
-    if (!isOpenclawReady()) {
-      setDefaultRoute('/setup')
-      navigate('/setup')
-    } else {
-      if (window.location.hash === '#/setup') navigate('/dashboard')
-      setupGatewayBanner()
-      startGatewayPoll()
 
-      // 自动连接 WebSocket（如果 Gateway 正在运行）
-      if (isGatewayRunning()) {
-        autoConnectWebSocket()
-      }
-
-      // 监听 Gateway 状态变化，自动连接/断开 WebSocket
-      onGatewayChange((running) => {
-        if (running) {
-          autoConnectWebSocket()
-          // 正向时机：Gateway 启动成功，延迟弹社区引导
-          setTimeout(tryShowEngagement, 5000)
-        } else {
-          wsClient.disconnect()
-        }
-      })
-
-      // 守护放弃时，弹出恢复选项
-      if (isTauriRuntime()) {
-        import('@tauri-apps/api/event').then(async ({ listen }) => {
-          await listen('guardian-event', (e) => {
-            if (e.payload?.kind === 'give_up') showGuardianRecovery()
-            else if (e.payload?.kind === 'auto_fix_start') toast(t('dashboard.fixing'), 'info')
-            else if (e.payload?.kind === 'auto_fix_retry') toast(t('dashboard.fixDoneRestarting'), 'info')
-            else if (e.payload?.kind === 'auto_fix_success') toast(t('dashboard.fixDoneRestarted'), 'success')
-            else if (e.payload?.kind === 'auto_fix_failure') toast(String(e.payload?.message || t('dashboard.fixDoneRestartFail')).slice(0, 240), 'error')
-          })
-        }).catch(() => {})
-        api.guardianStatus().then(status => {
-          if (status?.giveUp) showGuardianRecovery()
-        }).catch(() => {})
-      } else {
-        onGuardianGiveUp(() => {
-          showGuardianRecovery()
-        })
-      }
-
-      // 实例切换时，重连 WebSocket + 重新检测状态
-      onInstanceChange(async () => {
-        wsClient.disconnect()
-        await detectOpenclawStatus()
-        if (isGatewayRunning()) autoConnectWebSocket()
-      })
+    // 监听引擎状态变化（如 setup 完成后 ready 变为 true），自动刷新侧边栏
+    if (engine.onStateChange) {
+      engine.onStateChange(() => renderSidebar(sidebar))
+    }
+    if (engine.onReadyChange) {
+      engine.onReadyChange(() => renderSidebar(sidebar))
     }
 
-    // 全局监听后台任务完成/失败事件，自动刷新安装状态和侧边栏
-    if (isTauriRuntime()) {
+    if (!engine.isReady()) {
+      setDefaultRoute(engine.getSetupRoute())
+      navigate(engine.getSetupRoute())
+    } else {
+      const setupRoute = engine.getSetupRoute()
+      const currentHash = window.location.hash.slice(1) || ''
+      if (currentHash === setupRoute || !currentHash) {
+        navigate(engine.getDefaultRoute())
+      }
+
+      // === OpenClaw 专属逻辑（WebSocket、Guardian 守护等） ===
+      if (getActiveEngineId() === 'openclaw') {
+        setupGatewayBanner()
+
+        // 自动连接 WebSocket（如果 Gateway 正在运行）
+        if (isGatewayRunning()) {
+          autoConnectWebSocket()
+        }
+
+        // 监听 Gateway 状态变化，自动连接/断开 WebSocket
+        onGatewayChange((running) => {
+          if (running) {
+            autoConnectWebSocket()
+            // 正向时机：Gateway 启动成功，延迟弹社区引导
+            setTimeout(tryShowEngagement, 5000)
+          } else {
+            wsClient.disconnect()
+          }
+        })
+
+        // 守护放弃时，弹出恢复选项
+        if (isTauriRuntime()) {
+          import('@tauri-apps/api/event').then(async ({ listen }) => {
+            await listen('guardian-event', (e) => {
+              if (e.payload?.kind === 'give_up') showGuardianRecovery()
+              else if (e.payload?.kind === 'auto_fix_start') toast(t('dashboard.fixing'), 'info')
+              else if (e.payload?.kind === 'auto_fix_retry') toast(t('dashboard.fixDoneRestarting'), 'info')
+              else if (e.payload?.kind === 'auto_fix_success') toast(t('dashboard.fixDoneRestarted'), 'success')
+              else if (e.payload?.kind === 'auto_fix_failure') toast(String(e.payload?.message || t('dashboard.fixDoneRestartFail')).slice(0, 240), 'error')
+            })
+          }).catch(() => {})
+          api.guardianStatus().then(status => {
+            if (status?.giveUp) showGuardianRecovery()
+          }).catch(() => {})
+        } else {
+          onGuardianGiveUp(() => {
+            showGuardianRecovery()
+          })
+        }
+
+        // 实例切换时，重连 WebSocket + 重新检测状态
+        onInstanceChange(async () => {
+          wsClient.disconnect()
+          await detectOpenclawStatus()
+          if (isGatewayRunning()) autoConnectWebSocket()
+        })
+      }
+    }
+
+    // 全局监听后台任务完成/失败事件，自动刷新安装状态和侧边栏（仅 OpenClaw）
+    if (isTauriRuntime() && getActiveEngineId() === 'openclaw') {
       import('@tauri-apps/api/event').then(async ({ listen }) => {
         const refreshAfterTask = async () => {
           // 清除 API 缓存，确保拿到最新状态

@@ -373,4 +373,21 @@ export const api = {
   saveImage: (id, data) => invoke('assistant_save_image', { id, data }),
   loadImage: (id) => invoke('assistant_load_image', { id }),
   deleteImage: (id) => invoke('assistant_delete_image', { id }),
+
+  // Hermes Agent 管理
+  checkPython: () => cachedInvoke('check_python', {}, 60000),
+  checkHermes: () => cachedInvoke('check_hermes', {}, 30000),
+  installHermes: (method = 'uv-tool', extras = []) => invoke('install_hermes', { method, extras }),
+  configureHermes: (provider, apiKey, model, baseUrl) => invoke('configure_hermes', { provider, apiKey, model: model || null, baseUrl: baseUrl || null }),
+  hermesGatewayAction: (action) => invoke('hermes_gateway_action', { action }),
+  hermesHealthCheck: () => invoke('hermes_health_check'),
+  hermesApiProxy: (method, path, body, headers) => invoke('hermes_api_proxy', { method, path, body: body || null, headers: headers || null }),
+  hermesAgentRun: (input, sessionId, conversationHistory, instructions) => invoke('hermes_agent_run', { input, sessionId: sessionId || null, conversationHistory: conversationHistory || null, instructions: instructions || null }),
+  hermesReadConfig: () => invoke('hermes_read_config'),
+  hermesFetchModels: (baseUrl, apiKey, apiType) => invoke('hermes_fetch_models', { baseUrl, apiKey, apiType: apiType || null }),
+  hermesUpdateModel: (model) => invoke('hermes_update_model', { model }),
+  hermesDetectEnvironments: () => invoke('hermes_detect_environments'),
+  hermesSetGatewayUrl: (url) => invoke('hermes_set_gateway_url', { url: url || null }),
+  updateHermes: () => invoke('update_hermes'),
+  uninstallHermes: (cleanConfig = false) => invoke('uninstall_hermes', { cleanConfig }),
 }

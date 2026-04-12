@@ -4,7 +4,7 @@
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
 import { getActiveInstance, onGatewayChange } from '../lib/app-state.js'
-import { isForeignGatewayError, isForeignGatewayService, maybeShowForeignGatewayBindingPrompt, showGatewayConflictGuidance } from '../lib/gateway-ownership.js'
+import { isForeignGatewayError, isForeignGatewayService, maybeShowForeignGatewayBindingPrompt, showGatewayConflictGuidance, showInstallationCleanup } from '../lib/gateway-ownership.js'
 import { navigate } from '../router.js'
 import { t } from '../lib/i18n.js'
 import { wsClient } from '../lib/ws-client.js'
@@ -274,11 +274,13 @@ function renderStatCards(page, services, version, agents, config, panelConfig) {
       ${multiInstall && !cliBound
         ? `<div class="stat-card-meta" style="margin-top:8px;color:var(--warning);line-height:1.6">${t('dashboard.multiInstallCardHint')}</div>
            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+             <button class="btn btn-primary btn-xs" data-action="open-cleanup">${t('services.cleanupTitle')}</button>
              <button class="btn btn-secondary btn-xs" data-action="resolve-multi-install">${t('dashboard.viewGuidance')}</button>
-             <button class="btn btn-primary btn-xs" data-action="open-settings">${t('dashboard.goSettings')}</button>
+             <button class="btn btn-secondary btn-xs" data-action="open-settings">${t('dashboard.goSettings')}</button>
            </div>`
         : multiInstall && cliBound
-          ? `<div class="stat-card-meta" style="margin-top:4px;color:var(--text-tertiary);font-size:11px">✓ ${t('dashboard.multiInstallBoundOk', { count: installCount })}</div>`
+          ? `<div class="stat-card-meta" style="margin-top:4px;color:var(--text-tertiary);font-size:11px">✓ ${t('dashboard.multiInstallBoundOk', { count: installCount })}</div>
+             <div style="margin-top:6px"><button class="btn btn-secondary btn-xs" data-action="open-cleanup">${t('services.cleanupTitle')}</button></div>`
         : ''}
     </div>
     <div class="stat-card">
@@ -601,6 +603,11 @@ function bindActions(page) {
 
     if (action === 'open-settings') {
       navigate('/settings')
+      return
+    }
+
+    if (action === 'open-cleanup') {
+      await showInstallationCleanup({ onRefresh: () => loadDashboardData(page, true) })
       return
     }
 

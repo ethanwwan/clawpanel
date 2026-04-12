@@ -8,6 +8,7 @@ import { showUpgradeModal, showConfirm } from '../components/modal.js'
 import { setUpgrading } from '../lib/app-state.js'
 import { icon, statusIcon } from '../lib/icons.js'
 import { t, getLang } from '../lib/i18n.js'
+import { getActiveEngineId } from '../lib/engine-manager.js'
 
 export async function render() {
   const page = document.createElement('div')
@@ -52,13 +53,72 @@ export async function render() {
     </div>
   `
 
-  loadData(page)
+  if (getActiveEngineId() === 'hermes') {
+    loadHermesData(page)
+  } else {
+    loadData(page)
+  }
   renderCommunity(page)
   renderProjects(page)
   renderContribute(page)
   renderLinks(page)
   renderCompany(page)
   return page
+}
+
+async function loadHermesData(page) {
+  const cards = page.querySelector('#version-cards')
+  try {
+    const [hermesInfo, pythonInfo] = await Promise.all([
+      api.checkHermes().catch(() => null),
+      api.checkPython().catch(() => null),
+    ])
+
+    let panelVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0'
+    try {
+      const { getVersion } = await import('@tauri-apps/api/app')
+      panelVersion = await getVersion()
+    } catch {}
+
+    let panelUpdateHtml = `<span style="color:var(--text-tertiary)">${t('about.checkingUpdate')}</span>`
+    checkHotUpdate(cards, panelVersion)
+
+    const installed = !!hermesInfo?.installed
+    const gwRunning = !!hermesInfo?.gatewayRunning
+    const version = hermesInfo?.hermesVersion || hermesInfo?.version || ''
+    const model = hermesInfo?.model || ''
+    const port = hermesInfo?.gatewayPort || 8642
+    const pyVer = pythonInfo?.version || ''
+    const pyPath = pythonInfo?.path || ''
+
+    const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+    cards.innerHTML = `
+      <div class="stat-card">
+        <div class="stat-card-header"><span class="stat-card-label">ClawPanel</span></div>
+        <div class="stat-card-value">${panelVersion}</div>
+        <div class="stat-card-meta" id="panel-update-meta" style="display:flex;align-items:center;gap:8px">${panelUpdateHtml}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-header"><span class="stat-card-label">Hermes Agent</span></div>
+        <div class="stat-card-value">${installed ? (version || t('about.installed')) : t('about.notInstalled')}</div>
+        <div class="stat-card-meta" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${gwRunning
+            ? `<span style="color:var(--success)">● Gateway ${t('engine.dashRunning')} · :${port}</span>`
+            : `<span style="color:var(--text-tertiary)">○ Gateway ${t('engine.dashStopped')}</span>`}
+          ${model ? `<span style="color:var(--text-secondary)">${t('engine.dashModel')}: ${esc(model)}</span>` : ''}
+          ${!installed ? `<a class="btn btn-primary btn-sm" href="#/h/setup" style="padding:2px 8px;font-size:var(--font-size-xs)">${t('about.hermesSetup')}</a>` : ''}
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-header"><span class="stat-card-label">Python</span></div>
+        <div class="stat-card-value" style="font-size:var(--font-size-sm)">${pyVer || t('about.notInstalled')}</div>
+        <div class="stat-card-meta" style="word-break:break-all">${esc(pyPath)}</div>
+      </div>
+    `
+  } catch {
+    cards.innerHTML = `<div class="stat-card"><div class="stat-card-label">${t('common.loadFailed')}</div></div>`
+  }
 }
 
 async function loadData(page) {

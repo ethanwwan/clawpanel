@@ -18,6 +18,8 @@ export default {
   policyAhead: _('检测到你本地安装的是高于推荐稳定版的 {current}，可能存在接口、事件或配置兼容性问题。建议回退到 {recommended}；如果你要继续使用高版本，请自行验证兼容性并关注 issue / release。', 'Your local installation {current} is ahead of the recommended stable version. There may be API, event, or config compatibility issues. Consider rolling back to {recommended}; if you want to keep the newer version, verify compatibility yourself and watch issues/releases.', '檢測到你本地安裝的是高於推薦穩定版的 {current}，可能存在介面、事件或設定相容性問題。建議回退到 {recommended}；如果你要繼續使用高版本，請自行驗證相容性並關注 issue / release。'),
   policyDefault: _('当前面板默认只保证推荐稳定版的兼容性；如果你要尝试其他版本或预览版，请自行验证兼容性。若希望面板尽快支持最新版特性，欢迎提交 issue 告诉我们。', 'This panel only guarantees compatibility with the recommended stable version. If you want to try other versions or previews, verify compatibility yourself. Submit an issue if you want us to support the latest version sooner.', '目前面板預設只保證推薦穩定版的相容性；如果你要尝試其他版本或預覽版，請自行驗證相容性。若希望面板尽快支援最新版特性，欢迎提交 issue 告诉我們。'),
   notInstalled: _('未安装', 'Not installed', '未安裝', '未インストール', '미설치', 'Chưa cài đặt', 'No instalado', 'Não instalado', 'Не установлен', 'Non installé', 'Nicht installiert'),
+  installed: _('已安装', 'Installed', '已安裝'),
+  hermesSetup: _('前往配置', 'Go to Setup', '前往配置'),
   aheadOfRecommended: _('当前版本高于推荐稳定版: {ver}', 'Current version is ahead of recommended stable: {ver}', '目前版本高於推薦穩定版: {ver}'),
   rollbackToRecommended: _('回退到推荐版', 'Rollback to recommended', '回退到推薦版'),
   recommendedStable: _('推荐稳定版: {ver}', 'Recommended stable: {ver}', '推薦穩定版: {ver}', '推奨安定版: {ver}', '권장 안정 버전: {ver}'),

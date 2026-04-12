@@ -3,12 +3,13 @@
  */
 import { navigate, getCurrentRoute, reloadCurrentRoute } from '../router.js'
 import { toggleTheme, getTheme } from '../lib/theme.js'
-import { isOpenclawReady, getActiveInstance, switchInstance, onInstanceChange } from '../lib/app-state.js'
+import { isOpenclawReady } from '../lib/app-state.js'
 import { api } from '../lib/tauri-api.js'
 import { toast } from './toast.js'
 import { version as APP_VERSION } from '../../package.json'
 import { t, getLang, setLang, getAvailableLangs } from '../lib/i18n.js'
 import { isFeatureAvailable } from '../lib/feature-gates.js'
+import { getActiveEngine, getActiveEngineId, listEngines, switchEngine, onEngineChange } from '../lib/engine-manager.js'
 
 function NAV_ITEMS_FULL() { return [
   {
@@ -103,17 +104,39 @@ const ICONS = {
 }
 
 let _delegated = false
-let _hasMultipleInstances = false
 
-// 异步检测是否有多实例（首次渲染后触发，有多实例时重渲染）
-function _checkMultiInstances(el) {
-  api.instanceList().then(data => {
-    const has = data.instances && data.instances.length > 1
-    if (has !== _hasMultipleInstances) {
-      _hasMultipleInstances = has
-      renderSidebar(el)
-    }
-  }).catch(() => {})
+// === 引擎切换器 ===
+function _renderEngineSwitcher() {
+  const engines = listEngines()
+  if (engines.length < 2) return '' // 只有一个引擎时不显示
+  const active = getActiveEngine()
+  if (!active) return ''
+  return `<div class="engine-switcher" id="engine-switcher">
+    <button class="engine-current" id="btn-engine-toggle">
+      <span class="engine-icon">${active.icon || ''}</span>
+      <span class="engine-label">${_escSidebar(active.name)}</span>
+      <svg class="engine-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <div class="engine-dropdown" id="engine-dropdown">
+      ${engines.map(e => `<div class="engine-option${e.id === active.id ? ' active' : ''}" data-engine="${e.id}">
+        <span class="engine-opt-icon">${e.icon || ''}</span>
+        <span class="engine-opt-name">${_escSidebar(e.name)}</span>
+        ${e.id === active.id ? '<span class="engine-active-check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg></span>' : ''}
+      </div>`).join('')}
+    </div>
+  </div>`
+}
+
+function _closeEngineDropdown() {
+  const dd = document.getElementById('engine-dropdown')
+  if (dd) dd.classList.remove('open')
+}
+
+function _toggleEngineDropdown() {
+  const dd = document.getElementById('engine-dropdown')
+  if (!dd) return
+  if (dd.classList.contains('open')) { dd.classList.remove('open'); return }
+  dd.classList.add('open')
 }
 
 const LS_SIDEBAR_COLLAPSED = 'clawpanel_sidebar_collapsed'
@@ -135,10 +158,6 @@ function _setDesktopSidebarCollapsed(collapsed) {
 export function renderSidebar(el) {
   const current = getCurrentRoute()
 
-  const inst = getActiveInstance()
-  const isLocal = inst.type === 'local'
-  const showSwitcher = !isLocal || _hasMultipleInstances
-
   const collapsed = _isDesktopSidebarCollapsed()
   let html = `
     <div class="sidebar-header">
@@ -149,25 +168,21 @@ export function renderSidebar(el) {
       <button class="sidebar-collapse-btn" id="btn-sidebar-collapse" title="${t('sidebar.collapse')}">${collapsed ? '»' : '«'}</button>
       <button class="sidebar-close-btn" id="btn-sidebar-close" title="${t('sidebar.closeMenu')}">&times;</button>
     </div>
-    ${showSwitcher ? `<div class="instance-switcher" id="instance-switcher">
-      <button class="instance-current" id="btn-instance-toggle">
-        <span class="instance-dot ${isLocal ? 'local' : 'remote'}"></span>
-        <span class="instance-label">${_escSidebar(inst.name)}</span>
-        <svg class="instance-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M6 9l6 6 6-6"/></svg>
-      </button>
-      <div class="instance-dropdown" id="instance-dropdown"></div>
-    </div>` : ''}
+    ${_renderEngineSwitcher()}
     <nav class="sidebar-nav">
   `
 
-  const navItems = isOpenclawReady() ? NAV_ITEMS_FULL() : NAV_ITEMS_SETUP()
+  // 从当前引擎获取菜单（回退到原有逻辑）
+  const engine = getActiveEngine()
+  const navItems = engine ? engine.getNavItems() : (isOpenclawReady() ? NAV_ITEMS_FULL() : NAV_ITEMS_SETUP())
 
   for (const section of navItems) {
     html += `<div class="nav-section">
       <div class="nav-section-title">${section.section}</div>`
 
     for (const item of section.items) {
-      if (item.gate && !isFeatureAvailable(item.gate)) continue
+      if (item.gate && engine && !engine.isFeatureAvailable(item.gate)) continue
+      if (item.gate && !engine && !isFeatureAvailable(item.gate)) continue
       const active = current === item.route ? ' active' : ''
       html += `<div class="nav-item${active}" data-route="${item.route}">
         ${ICONS[item.icon] || ''}
@@ -227,9 +242,6 @@ export function renderSidebar(el) {
   // 应用折叠态（桌面端）
   _setDesktopSidebarCollapsed(collapsed)
 
-  // 首次渲染时异步检测多实例
-  if (!_delegated) _checkMultiInstances(el)
-
   // 事件委托：只绑定一次，避免重复绑定
   if (!_delegated) {
     _delegated = true
@@ -278,47 +290,40 @@ export function renderSidebar(el) {
         }
         return
       }
-      // 实例切换器
-      const toggleBtn = e.target.closest('#btn-instance-toggle')
-      if (toggleBtn) {
-        _toggleInstanceDropdown(el)
+      // 引擎切换器：打开/关闭下拉
+      const engineBtn = e.target.closest('#btn-engine-toggle')
+      if (engineBtn) {
+        _toggleEngineDropdown()
         return
       }
-      // 选择实例
-      const opt = e.target.closest('.instance-option[data-id]')
-      if (opt) {
-        const id = opt.dataset.id
-        _closeInstanceDropdown()
-        if (id !== getActiveInstance().id) {
-          opt.style.opacity = '0.5'
-          switchInstance(id).then(() => {
-            const inst = getActiveInstance()
-            const desc = inst.type === 'local' ? t('instance.local') : inst.name
-            toast(t('instance.switchedTo', { name: desc }), 'success')
+      // 引擎选项点击
+      const engineOpt = e.target.closest('.engine-option[data-engine]')
+      if (engineOpt) {
+        const eid = engineOpt.dataset.engine
+        _closeEngineDropdown()
+        if (eid !== getActiveEngineId()) {
+          engineOpt.style.opacity = '0.5'
+          switchEngine(eid).then(() => {
+            toast(t('engine.switchedTo', { name: getActiveEngine()?.name || eid }), 'success')
             renderSidebar(el)
-            reloadCurrentRoute()
+            // 跳转到新引擎的默认或 setup 页
+            const eng = getActiveEngine()
+            if (eng) {
+              navigate(eng.isReady() ? eng.getDefaultRoute() : eng.getSetupRoute())
+            }
           })
         }
         return
       }
-      // 添加实例
-      const addBtn = e.target.closest('#btn-instance-add')
-      if (addBtn) {
-        _closeInstanceDropdown()
-        _showAddInstanceDialog(el)
-        return
-      }
       // 点击其他区域关闭下拉
-      if (!e.target.closest('.instance-switcher')) {
-        _closeInstanceDropdown()
+      if (!e.target.closest('.engine-switcher')) {
+        _closeEngineDropdown()
       }
       if (!e.target.closest('.lang-switcher')) {
         _closeLangDropdown()
       }
     })
 
-    // 监听实例变化，刷新多实例标记后重新渲染
-    onInstanceChange(() => { _checkMultiInstances(el); renderSidebar(el) })
   }
 }
 
@@ -381,94 +386,3 @@ function _filterLangOptions(query) {
   })
 }
 
-function _closeInstanceDropdown() {
-  const dd = document.getElementById('instance-dropdown')
-  if (dd) dd.classList.remove('open')
-}
-
-async function _toggleInstanceDropdown(sidebarEl) {
-  const dd = document.getElementById('instance-dropdown')
-  if (!dd) return
-  if (dd.classList.contains('open')) { dd.classList.remove('open'); return }
-
-  dd.innerHTML = `<div style="padding:8px;color:var(--text-tertiary);font-size:12px">${t('common.loading')}</div>`
-  dd.classList.add('open')
-
-  try {
-    const [data, health] = await Promise.all([api.instanceList(), api.instanceHealthAll()])
-    const healthMap = Object.fromEntries((health || []).map(h => [h.id, h]))
-    const activeId = getActiveInstance().id
-    let html = `<div class="instance-hint">${t('instance.switchHint')}</div>`
-    for (const inst of data.instances) {
-      const h = healthMap[inst.id] || {}
-      const active = inst.id === activeId ? ' active' : ''
-      const dot = h.online !== false ? 'online' : 'offline'
-      const badge = inst.type === 'docker' ? `<span class="instance-badge docker">${t('instance.docker')}</span>` : inst.type === 'remote' ? `<span class="instance-badge remote">${t('instance.remote')}</span>` : ''
-      const port = inst.endpoint ? inst.endpoint.match(/:(\d+)/)?.[1] : ''
-      const portTag = port ? `<span class="instance-port">:${port}</span>` : ''
-      html += `<div class="instance-option${active}" data-id="${inst.id}">
-        <span class="instance-dot ${dot}"></span>
-        <span class="instance-opt-name">${_escSidebar(inst.name)}</span>
-        ${portTag}
-        ${badge}
-        ${active ? `<span class="instance-active-tag">${t('instance.current')}</span>` : ''}
-      </div>`
-    }
-    html += '<div class="instance-divider"></div>'
-    html += `<div class="instance-option instance-add" id="btn-instance-add">+ ${t('instance.addInstance')}</div>`
-    dd.innerHTML = html
-  } catch (e) {
-    dd.innerHTML = `<div style="padding:8px;color:var(--error);font-size:12px">${_escSidebar(e.message)}</div>`
-  }
-}
-
-async function _showAddInstanceDialog(sidebarEl) {
-  const overlay = document.createElement('div')
-  overlay.className = 'docker-dialog-overlay'
-  overlay.innerHTML = `
-    <div class="docker-dialog">
-      <div class="docker-dialog-title">${t('instance.addRemote')}</div>
-      <div class="form-group" style="margin-bottom:var(--space-md)">
-        <label class="form-label">${t('instance.nameLabel')}</label>
-        <input class="form-input" id="inst-name" placeholder="${t('instance.namePlaceholder')}" />
-      </div>
-      <div class="form-group" style="margin-bottom:var(--space-md)">
-        <label class="form-label">${t('instance.endpointLabel')}</label>
-        <input class="form-input" id="inst-endpoint" placeholder="http://192.168.1.100:1420" />
-      </div>
-      <div class="form-group" style="margin-bottom:var(--space-md)">
-        <label class="form-label">${t('instance.gwPortLabel')}</label>
-        <input class="form-input" id="inst-gw-port" type="number" value="18789" />
-      </div>
-      <div class="docker-dialog-hint">
-        ${t('instance.remoteHint')}<br/>
-        ${t('instance.example')}: <code>http://192.168.1.100:1420</code>
-      </div>
-      <div id="inst-add-error" style="color:var(--error);font-size:12px;margin-top:var(--space-sm)"></div>
-      <div class="docker-dialog-actions">
-        <button class="btn btn-secondary btn-sm" id="inst-cancel">${t('common.cancel')}</button>
-        <button class="btn btn-primary btn-sm" id="inst-confirm">${t('common.add')}</button>
-      </div>
-    </div>
-  `
-  document.body.appendChild(overlay)
-  overlay.querySelector('#inst-cancel').onclick = () => overlay.remove()
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove() })
-  overlay.querySelector('#inst-confirm').onclick = async () => {
-    const name = overlay.querySelector('#inst-name').value.trim()
-    const endpoint = overlay.querySelector('#inst-endpoint').value.trim()
-    const gwPort = parseInt(overlay.querySelector('#inst-gw-port').value) || 18789
-    const errEl = overlay.querySelector('#inst-add-error')
-    if (!name || !endpoint) { errEl.textContent = t('instance.nameRequired'); return }
-    const btn = overlay.querySelector('#inst-confirm')
-    btn.disabled = true; btn.textContent = t('instance.adding')
-    try {
-      await api.instanceAdd({ name, type: 'remote', endpoint, gatewayPort: gwPort })
-      overlay.remove()
-      renderSidebar(sidebarEl)
-    } catch (e) {
-      errEl.textContent = e.message || String(e)
-      btn.disabled = false; btn.textContent = t('common.add')
-    }
-  }
-}

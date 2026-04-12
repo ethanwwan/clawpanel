@@ -3195,10 +3195,12 @@ const handlers = {
     const normalizedAccountId = typeof accountId === 'string' ? accountId.trim() : ''
     const setRootChannelEntry = (entry) => {
       const current = cfg.channels?.[storageKey]
-      if (current && typeof current === 'object' && current.accounts && typeof current.accounts === 'object') {
-        entry.accounts = current.accounts
+      // 合并模式：保留用户通过 CLI 或手动编辑的自定义字段（streaming, retry, dmPolicy 等）
+      if (current && typeof current === 'object') {
+        cfg.channels[storageKey] = { ...current, ...entry }
+      } else {
+        cfg.channels[storageKey] = entry
       }
-      cfg.channels[storageKey] = entry
     }
     const setAccountChannelEntry = (entry) => {
       const current = cfg.channels?.[storageKey] && typeof cfg.channels[storageKey] === 'object'
@@ -3233,7 +3235,6 @@ const handlers = {
       if (form.allowedUsers) entry.allowFrom = form.allowedUsers.split(',').map(s => s.trim()).filter(Boolean)
     } else if (platform === 'discord') {
       entry.token = form.token
-      entry.groupPolicy = 'allowlist'
       if (form.guildId) {
         const ck = form.channelId || '*'
         entry.guilds = { [form.guildId]: { users: ['*'], requireMention: true, channels: { [ck]: { allow: true, requireMention: true } } } }
@@ -3261,7 +3262,18 @@ const handlers = {
     }
 
     if (platform !== 'qqbot' && platform !== 'feishu' && platform !== 'dingtalk' && platform !== 'dingtalk-connector') {
-      cfg.channels[storageKey] = entry
+      // 合并模式：保留用户通过 CLI 或手动编辑的自定义字段
+      const existing = cfg.channels[storageKey]
+      cfg.channels[storageKey] = (existing && typeof existing === 'object')
+        ? { ...existing, ...entry }
+        : entry
+      // Discord: 仅在首次创建时设置默认值，不覆盖用户已有的设置
+      if (platform === 'discord') {
+        const d = cfg.channels[storageKey]
+        if (!d.groupPolicy) d.groupPolicy = 'allowlist'
+        if (!d.dm) d.dm = { enabled: false }
+        if (!d.retry) d.retry = { attempts: 3, minDelayMs: 500, maxDelayMs: 30000, jitter: 0.1 }
+      }
     }
 
     writeOpenclawConfigFile(cfg)
@@ -3437,7 +3449,7 @@ const handlers = {
       if (cfg.plugins.entries[pid]) cfg.plugins.entries[pid].enabled = false
     }
 
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8')
+    writeOpenclawConfigFile(cfg)
     return { ok: true, enabled, pluginId: pid }
   },
 

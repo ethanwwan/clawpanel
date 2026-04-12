@@ -2841,6 +2841,7 @@ function appendSystemMessage(text) {
 }
 
 function clearMessages() {
+  if (!_messagesEl) return
   _messagesEl.querySelectorAll('.msg').forEach(m => m.remove())
   _autoScrollEnabled = true
   _lastScrollTop = 0
