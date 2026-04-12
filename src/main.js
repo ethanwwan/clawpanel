@@ -14,7 +14,7 @@ import { api, checkBackendHealth, isBackendOnline, isTauriRuntime, onBackendStat
 import { version as APP_VERSION } from '../package.json'
 import { statusIcon } from './lib/icons.js'
 import { isForeignGatewayError, showGatewayConflictGuidance } from './lib/gateway-ownership.js'
-import { tryShowEngagement } from './components/engagement.js'
+// import { tryShowEngagement } from './components/engagement.js'
 import { toast } from './components/toast.js'
 import { initI18n, t } from './lib/i18n.js'
 import { initFeatureGates } from './lib/feature-gates.js'
@@ -407,7 +407,7 @@ async function boot() {
         if (running) {
           autoConnectWebSocket()
           // 正向时机：Gateway 启动成功，延迟弹社区引导
-          setTimeout(tryShowEngagement, 5000)
+          // setTimeout(tryShowEngagement, 5000)
         } else {
           wsClient.disconnect()
         }
