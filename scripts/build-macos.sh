@@ -61,10 +61,13 @@ ok "目标已添加"
 
 # ── 完整构建（Tauri 自动处理前端 + Rust + Bundle）────────────────────────────
 
+step "构建前端"
+npm run build
+
 step "构建 macOS 应用 (aarch64)"
 
 cd src-tauri
-cargo build --release --target aarch64-apple-darwin
+npx tauri build --target aarch64-apple-darwin
 cd ..
 
 ok "Rust 编译完成"
@@ -78,7 +81,7 @@ mkdir -p "$BUNDLE_DIR/ClawPanel.app/Contents/MacOS"
 mkdir -p "$BUNDLE_DIR/ClawPanel.app/Contents/Resources"
 
 # 复制二进制
-cp src-tauri/target/release/clawpanel "$BUNDLE_DIR/ClawPanel.app/Contents/MacOS/"
+cp src-tauri/target/aarch64-apple-darwin/release/clawpanel "$BUNDLE_DIR/ClawPanel.app/Contents/MacOS/"
 
 # 复制前端产物
 cp -R dist/* "$BUNDLE_DIR/ClawPanel.app/Contents/Resources/"
@@ -86,6 +89,8 @@ cp -R dist/* "$BUNDLE_DIR/ClawPanel.app/Contents/Resources/"
 # 复制图标
 if [ -d src-tauri/icons ]; then
   cp -R src-tauri/icons "$BUNDLE_DIR/ClawPanel.app/Contents/Resources/"
+  # 将 icon.icns 复制到 Resources 根目录（Info.plist 期望的位置）
+  cp src-tauri/icons/icon.icns "$BUNDLE_DIR/ClawPanel.app/Contents/Resources/" 2>/dev/null || true
 fi
 
 # 创建 Info.plist
@@ -101,9 +106,9 @@ cat > "$BUNDLE_DIR/ClawPanel.app/Contents/Info.plist" << 'EOF'
     <key>CFBundleName</key>
     <string>ClawPanel</string>
     <key>CFBundleVersion</key>
-    <string>0.11.6</string>
+    <string>0.12.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.11.6</string>
+    <string>0.12.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -144,7 +149,7 @@ echo ""
 step "创建 DMG 安装包"
 
 DMG_DIR="src-tauri/target/release/bundle/dmg"
-DMG_PATH="${DMG_DIR}/ClawPanel_0.11.6_aarch64.dmg"
+DMG_PATH="${DMG_DIR}/ClawPanel_0.12.0_aarch64.dmg"
 mkdir -p "$DMG_DIR"
 
 # 方法1: 使用 hdiutil 直接创建（推荐）
@@ -155,9 +160,18 @@ echo "  正在创建 DMG..."
 echo "  源: $APP_PATH"
 echo "  目标: $DMG_PATH"
 
-# 尝试使用 hdiutil
-if hdiutil create "$TEMP_DMG" -volname "ClawPanel" -srcfolder "$APP_PATH" -ov -format UDZO -quiet 2>&1; then
+# 方法1: 使用临时目录创建 DMG（推荐）
+DMG_TEMP_DIR=$(mktemp -d)
+cp -R "$APP_PATH" "$DMG_TEMP_DIR/"
+ln -s /Applications "$DMG_TEMP_DIR/Applications"
+
+echo "  正在创建 DMG..."
+echo "  源: $DMG_TEMP_DIR"
+echo "  目标: $DMG_PATH"
+
+if hdiutil create "$TEMP_DMG" -volname "ClawPanel" -srcfolder "$DMG_TEMP_DIR" -ov -format UDZO -quiet 2>&1; then
   mv "${TEMP_DMG}.dmg" "$DMG_PATH" 2>/dev/null || mv "$TEMP_DMG" "$DMG_PATH"
+  rm -rf "$DMG_TEMP_DIR"
   if [ -f "$DMG_PATH" ]; then
     ok "DMG 创建成功: $DMG_PATH"
     ls -lh "$DMG_PATH"
@@ -166,7 +180,8 @@ if hdiutil create "$TEMP_DMG" -volname "ClawPanel" -srcfolder "$APP_PATH" -ov -f
     ls "$DMG_DIR"/*.dmg 2>/dev/null || echo "  ${GRAY}DMG 文件可能在其他位置${RESET}"
   fi
 else
-  # 方法2: 手动创建 DMG（备用）
+  rm -rf "$DMG_TEMP_DIR"
+  # 方法2: 备用方案
   echo "  方法1失败，尝试备用方案..."
 
   hdiutil create "$TEMP_DMG" -volname "ClawPanel" -fs HFS+ -size 300m 2>/dev/null
