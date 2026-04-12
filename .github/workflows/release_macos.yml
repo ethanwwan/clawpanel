@@ -59,7 +59,7 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            src-tauri/target/release/bundle/dmg/ClawPanel_${{ env.VERSION }}_aarch64.dmg
+            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/ClawPanel_${{ env.VERSION }}_aarch64.dmg
           body: |
             # 📥 下载安装
 
@@ -70,10 +70,6 @@ jobs:
             | 芯片 | 安装包 |
             |------|--------|
             | Apple Silicon (M1/M2/M3/M4) | ClawPanel_${{ env.VERSION }}_aarch64.dmg |
-
-            > **⚠️ 首次打开提示"无法验证开发者"？**
-            > 在终端执行：`sudo xattr -rd com.apple.quarantine /Applications/ClawPanel.app`
-            > 或前往 **系统设置 → 隐私与安全性** 点击「仍要打开」。
 
             ## 系统要求
 
