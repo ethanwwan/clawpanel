@@ -407,7 +407,7 @@ async function boot() {
       onGatewayChange((running) => {
         if (running) {
           autoConnectWebSocket()
-          // 正向时机：Gateway 启动成功，延迟弹社区引导（AI助手功能启用时显示）
+          // 正向时机：Gateway 启动成功，延迟弹社区引导（Claw助手功能启用时显示）
           if (isQingchenFeatureAvailable()) {
             setTimeout(tryShowEngagement, 5000)
           }
