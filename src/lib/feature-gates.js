@@ -31,7 +31,7 @@ export async function loadPanelConfig() {
 }
 
 export function isQingchenFeatureAvailable() {
-  return _panelConfig?.qingchenFeatureAvailable !== false
+  return false
 }
 
 let _cachedVersion = null
