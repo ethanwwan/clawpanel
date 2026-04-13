@@ -12,6 +12,7 @@ import { icon, statusIcon } from '../lib/icons.js'
 import { QTCOOL, PROVIDER_PRESETS, API_TYPES as SHARED_API_TYPES, fetchQtcoolModels } from '../lib/model-presets.js'
 import { t } from '../lib/i18n.js'
 import { getActiveEngineId } from '../lib/engine-manager.js'
+import { isQingchenFeatureAvailable } from '../lib/feature-gates.js'
 
 // ── 常量 ──
 const STORAGE_KEY = 'clawpanel-assistant'
@@ -2836,6 +2837,7 @@ function showSettings() {
           </div>
           <div class="form-hint" id="ast-api-hint" style="margin-top:-4px">${apiHintText(c.apiType)}</div>
 
+          ${isQingchenFeatureAvailable() ? `
           <div id="ast-qtcool-promo" style="margin-top:14px;border-radius:var(--radius-lg);border:1px solid var(--border-primary);border-left:3px solid var(--primary);background:var(--bg-secondary);overflow:hidden">
             <div style="padding:14px 16px 12px">
               <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px">
@@ -2874,6 +2876,7 @@ function showSettings() {
               <a href="${QTCOOL.site}" target="_blank" style="color:var(--primary);text-decoration:none;font-size:11px">${icon('external-link', 11)} ${t('assistant.qtcoolLearnMore')}</a>
             </div>
           </div>
+          ` : ''}
         </div>
         <div class="ast-tab-panel" data-panel="tools">
           <div class="form-hint" style="margin-bottom:10px">${t('assistant.toolsHint')}</div>
