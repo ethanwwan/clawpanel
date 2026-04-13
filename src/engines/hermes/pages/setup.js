@@ -85,7 +85,8 @@ export function render() {
     const idx = phases.findIndex(p => p.id === phase)
     return `<div class="hermes-phases">${phases.map((p, i) => {
       const cls = i < idx ? 'done' : i === idx ? 'active' : ''
-      return `<div class="hermes-phase ${cls}">
+      const clickable = i < idx ? `data-goto-phase="${p.id}" style="cursor:pointer" title="${t('engine.hermesPhaseClickHint')}"` : ''
+      return `<div class="hermes-phase ${cls}" ${clickable}>
         <span class="hermes-phase-dot">${i < idx ? ICONS.check : i + 1}</span>
         <span class="hermes-phase-label">${p.label}</span>
       </div>`
@@ -267,6 +268,13 @@ export function render() {
 
   // --- 事件绑定 ---
   function bind() {
+    // 点击已完成的阶段指示器，跳回该步骤
+    el.querySelectorAll('[data-goto-phase]').forEach(dot => {
+      dot.addEventListener('click', () => {
+        phase = dot.dataset.gotoPhase
+        draw()
+      })
+    })
     // 安装按钮
     el.querySelector('.hermes-install-btn')?.addEventListener('click', doInstall)
     // 全选 extras
@@ -356,15 +364,10 @@ export function render() {
 
       draw()
 
-      // 自动跳转
+      // 自动跳转到最合适的阶段（不自动离开向导，让用户可以查看和回退每一步）
       await new Promise(r => setTimeout(r, 800))
       if (hm.installed && hm.gatewayRunning) {
         phase = 'complete'
-        // 更新引擎状态并自动跳转仪表盘
-        const engine = getActiveEngine()
-        if (engine?.detect) await engine.detect()
-        window.location.hash = '#/h/dashboard'
-        return
       } else if (hm.installed && hm.configExists) {
         phase = 'gateway'
       } else if (hm.installed) {

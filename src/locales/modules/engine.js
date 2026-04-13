@@ -3,6 +3,7 @@ import { _ } from '../helper.js'
 export default {
   switchedTo: _('已切换到 {name} 模式', 'Switched to {name} mode', '已切換到 {name} 模式', '{name} モードに切り替えました', '{name} 모드로 전환됨'),
   hermesSetupDesc: _('安装并配置 Hermes Agent', 'Install and configure Hermes Agent', '安裝並配置 Hermes Agent'),
+  hermesPhaseClickHint: _('点击可返回此步骤', 'Click to go back to this step', '點擊可返回此步驟', 'このステップに戻るにはクリック', '이 단계로 돌아가려면 클릭'),
   hermesSetupIntro: _(
     'Hermes Agent 是一个具有工具调用能力的 AI 助手框架。点击下方按钮一键安装，无需终端操作。',
     'Hermes Agent is an AI assistant with tool-calling capabilities. Click the button below to install — no terminal needed.',
