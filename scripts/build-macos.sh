@@ -58,19 +58,14 @@ ok "版本同步完成"
 step "清理旧产物"
 rm -rf src-tauri/target/release/bundle/macos/ClawPanel.app
 rm -rf src-tauri/target/release/bundle/dmg/*.dmg
+rm -rf src-tauri/target/aarch64-apple-darwin/release/bundle/
 ok "清理完成"
-
-# ── 添加 Rust 编译目标 ──────────────────────────────────────────────────────────
-
-step "添加 Rust 编译目标"
-rustup target add aarch64-apple-darwin 2>/dev/null || true
-ok "目标已添加"
 
 # ── 构建 Tauri 应用 ──────────────────────────────────────────────────────────
 
-step "构建 macOS 应用 (aarch64)"
+step "构建 macOS 应用"
 cd src-tauri
-npx tauri build --target aarch64-apple-darwin
+npx tauri build
 cd ..
 
 ok "构建完成"
