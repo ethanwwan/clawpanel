@@ -2598,6 +2598,7 @@ function appendUserMessage(text, attachments = [], msgTime) {
 
   if (text) {
     const textNode = document.createElement('div')
+    textNode.className = 'msg-text'
     textNode.textContent = text
     bubble.appendChild(textNode)
   }
