@@ -6,6 +6,7 @@ import { toggleTheme, getTheme } from '../lib/theme.js'
 import { isOpenclawReady } from '../lib/app-state.js'
 import { api } from '../lib/tauri-api.js'
 import { toast } from './toast.js'
+import { isQingchenFeatureAvailable } from '../lib/feature-gates.js'
 const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0'
 import { t, getLang, setLang, getAvailableLangs } from '../lib/i18n.js'
 import { isFeatureAvailable } from '../lib/feature-gates.js'
@@ -16,7 +17,7 @@ function NAV_ITEMS_FULL() { return [
     section: t('sidebar.sectionMonitor'),
     items: [
       { route: '/dashboard', label: t('sidebar.dashboard'), icon: 'dashboard' },
-      { route: '/assistant', label: t('sidebar.assistant'), icon: 'assistant' },
+      ...(isQingchenFeatureAvailable() ? [{ route: '/assistant', label: t('sidebar.assistant'), icon: 'assistant' }] : []),
       { route: '/chat', label: t('sidebar.chat'), icon: 'chat' },
       { route: '/route-map', label: t('sidebar.routeMap'), icon: 'route-map' },
       { route: '/services', label: t('sidebar.services'), icon: 'services' },
@@ -65,7 +66,7 @@ function NAV_ITEMS_SETUP() { return [
     section: '',
     items: [
       { route: '/setup', label: t('sidebar.setup'), icon: 'setup' },
-      { route: '/assistant', label: t('sidebar.assistant'), icon: 'assistant' },
+      ...(isQingchenFeatureAvailable() ? [{ route: '/assistant', label: t('sidebar.assistant'), icon: 'assistant' }] : []),
     ]
   },
   {
