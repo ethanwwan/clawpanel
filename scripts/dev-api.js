@@ -6074,6 +6074,9 @@ const handlers = {
   read_panel_config() {
     return readPanelConfig()
   },
+  get_panel_config() {
+    return readPanelConfig()
+  },
 
   write_panel_config({ config }) {
     const nextConfig = config && typeof config === 'object' ? { ...config } : {}
