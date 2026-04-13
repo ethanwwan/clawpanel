@@ -10,7 +10,7 @@ pub fn update_dir() -> PathBuf {
 }
 
 /// 更新清单 URL（GitHub Pages 托管）
-const LATEST_JSON_URL: &str = "https://claw.qt.cool/update/latest.json";
+// const LATEST_JSON_URL: &str = "https://claw.qt.cool/update/latest.json";
 
 /// 检查前端是否有新版本可用（已禁用热更新）
 #[tauri::command]
@@ -129,31 +129,31 @@ pub fn get_update_status() -> Result<Value, String> {
 }
 
 /// 简单的语义化版本比较：current >= required
-fn version_ge(current: &str, required: &str) -> bool {
-    let parse = |s: &str| -> Vec<u32> {
-        s.trim_start_matches('v')
-            .split('.')
-            .filter_map(|p| p.parse().ok())
-            .collect()
-    };
-    let c = parse(current);
-    let r = parse(required);
-    for i in 0..r.len().max(c.len()) {
-        let cv = c.get(i).copied().unwrap_or(0);
-        let rv = r.get(i).copied().unwrap_or(0);
-        if cv > rv {
-            return true;
-        }
-        if cv < rv {
-            return false;
-        }
-    }
-    true
-}
+// fn version_ge(current: &str, required: &str) -> bool {
+//     let parse = |s: &str| -> Vec<u32> {
+//         s.trim_start_matches('v')
+//             .split('.')
+//             .filter_map(|p| p.parse().ok())
+//             .collect()
+//     };
+//     let c = parse(current);
+//     let r = parse(required);
+//     for i in 0..r.len().max(c.len()) {
+//         let cv = c.get(i).copied().unwrap_or(0);
+//         let rv = r.get(i).copied().unwrap_or(0);
+//         if cv > rv {
+//             return true;
+//         }
+//         if cv < rv {
+//             return false;
+//         }
+//     }
+//     true
+// }
 
-fn version_gt(left: &str, right: &str) -> bool {
-    version_ge(left, right) && !version_ge(right, left)
-}
+// fn version_gt(left: &str, right: &str) -> bool {
+//     version_ge(left, right) && !version_ge(right, left)
+// }
 
 /// 根据文件扩展名推断 MIME 类型
 pub fn mime_from_path(path: &str) -> &'static str {
