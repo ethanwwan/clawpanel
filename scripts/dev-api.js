@@ -6298,7 +6298,7 @@ const handlers = {
 
   async check_panel_update() {
     const sources = [
-      { api: 'https://api.github.com/repos/qingchencloud/clawpanel/releases/latest', releases: 'https://github.com/qingchencloud/clawpanel/releases', name: 'github' },
+      { api: 'https://api.github.com/repos/ethanwwan/clawpanel/releases/latest', releases: 'https://github.com/ethanwwan/clawpanel/releases', name: 'github' },
       { api: 'https://gitee.com/api/v5/repos/QtCodeCreators/clawpanel/releases/latest', releases: 'https://gitee.com/QtCodeCreators/clawpanel/releases', name: 'gitee' },
     ]
     let lastErr = ''
