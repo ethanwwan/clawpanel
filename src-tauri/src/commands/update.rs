@@ -12,50 +12,12 @@ pub fn update_dir() -> PathBuf {
 /// 更新清单 URL（GitHub Pages 托管）
 const LATEST_JSON_URL: &str = "https://claw.qt.cool/update/latest.json";
 
-/// 检查前端是否有新版本可用
+/// 检查前端是否有新版本可用（已禁用热更新）
 #[tauri::command]
 pub async fn check_frontend_update() -> Result<Value, String> {
-    let client = super::build_http_client(std::time::Duration::from_secs(10), Some("ClawPanel"))
-        .map_err(|e| format!("HTTP 客户端错误: {e}"))?;
-
-    let resp = client
-        .get(LATEST_JSON_URL)
-        .send()
-        .await
-        .map_err(|e| format!("请求失败: {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("服务器返回 {}", resp.status()));
-    }
-
-    let manifest: Value = resp.json().await.map_err(|e| format!("解析失败: {e}"))?;
-
-    let latest = manifest
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let current = env!("CARGO_PKG_VERSION");
-
-    // 检查最低兼容的 app 版本（前端可能依赖较新的 Rust 后端命令）
-    let min_app = manifest
-        .get("minAppVersion")
-        .and_then(|v| v.as_str())
-        .unwrap_or("0.0.0");
-
-    let compatible = version_ge(current, min_app);
-    let remote_newer = !latest.is_empty() && compatible && version_gt(&latest, current);
-    let update_ready = remote_newer && update_dir().join("index.html").exists();
-    let has_update = remote_newer && !update_ready;
-
     Ok(serde_json::json!({
-        "currentVersion": current,
-        "latestVersion": latest,
-        "hasUpdate": has_update,
-        "compatible": compatible,
-        "updateReady": update_ready,
-        "manifest": manifest
+        "hasUpdate": false,
+        "updateReady": false
     }))
 }
 
