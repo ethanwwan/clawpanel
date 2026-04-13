@@ -28,10 +28,11 @@ export async function render() {
       <div class="stat-card loading-placeholder"></div>
       <div class="stat-card loading-placeholder"></div>
     </div>
+    ${isQingchenFeatureAvailable() ? `
     <div class="config-section">
       <div class="config-section-title">${t('about.sectionCommunity')}</div>
       <div id="community-section"></div>
-    </div>
+    </div>` : ''}
     <div class="config-section">
       <div class="config-section-title">${t('about.sectionProjects')}</div>
       <div id="projects-list"></div>
@@ -44,10 +45,11 @@ export async function render() {
       <div class="config-section-title">${t('about.sectionLinks')}</div>
       <div id="links-list"></div>
     </div>
+    ${isQingchenFeatureAvailable() ? `
     <div class="config-section">
       <div class="config-section-title">${t('about.sectionAboutUs')}</div>
       <div id="company-section"></div>
-    </div>
+    </div>` : ''}
     <div class="config-section" style="color:var(--text-tertiary);font-size:var(--font-size-xs)">
       <p>${t('about.techStack')}</p>
       <p style="margin-top:8px">${t('about.copyright')}</p>
