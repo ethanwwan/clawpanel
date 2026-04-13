@@ -6292,6 +6292,10 @@ const handlers = {
     return true
   },
 
+  async check_frontend_update() {
+    return { hasUpdate: false }
+  },
+
   async check_panel_update() {
     const sources = [
       { api: 'https://api.github.com/repos/qingchencloud/clawpanel/releases/latest', releases: 'https://github.com/qingchencloud/clawpanel/releases', name: 'github' },
