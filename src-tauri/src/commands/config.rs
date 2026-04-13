@@ -5457,8 +5457,8 @@ pub async fn check_panel_update() -> Result<Value, String> {
     // 先尝试 GitHub，失败后降级 Gitee
     let sources = [
         (
-            "https://api.github.com/repos/qingchencloud/clawpanel/releases/latest",
-            "https://github.com/qingchencloud/clawpanel/releases",
+            "https://api.github.com/repos/ethanwwan/clawpanel/releases/latest",
+            "https://github.com/ethanwwan/clawpanel/releases",
             "github",
         ),
         (
