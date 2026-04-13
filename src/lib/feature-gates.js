@@ -124,7 +124,10 @@ export async function checkFeatureAvailable(featureId) {
  * 初始化：预加载版本信息
  */
 export async function initFeatureGates() {
-  await getCurrentVersion()
+  await Promise.all([
+    getCurrentVersion(),
+    loadPanelConfig(),
+  ])
 }
 
 /**
