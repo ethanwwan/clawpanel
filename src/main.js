@@ -17,7 +17,7 @@ import { isForeignGatewayError, showGatewayConflictGuidance } from './lib/gatewa
 import { tryShowEngagement } from './components/engagement.js'
 import { toast } from './components/toast.js'
 import { initI18n, t } from './lib/i18n.js'
-import { initFeatureGates } from './lib/feature-gates.js'
+import { initFeatureGates, isQingchenFeatureAvailable } from './lib/feature-gates.js'
 import { registerEngine, initEngineManager, getActiveEngine, getActiveEngineId, onEngineChange } from './lib/engine-manager.js'
 import openclawEngine from './engines/openclaw/index.js'
 import hermesEngine from './engines/hermes/index.js'
