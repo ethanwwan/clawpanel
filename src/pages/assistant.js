@@ -3215,7 +3215,10 @@ function showSettings() {
     }
   })
 
-  // ── gpt.qt.cool 一键配置 ──
+  // ── gpt.qt.cool 一键配置（仅晴辰功能可用时） ──
+  if (!isQingchenFeatureAvailable()) {
+    // 跳过 qtcool 相关元素初始化
+  } else {
   const qtcoolModelSelect = overlay.querySelector('#ast-qtcool-model')
   const qtcoolCustomKeyCheckbox = overlay.querySelector('#ast-qtcool-customkey')
   const qtcoolKeyInput = overlay.querySelector('#ast-qtcool-key')
@@ -3403,6 +3406,7 @@ function showSettings() {
       toast(t('assistant.qtcoolReadFail') + ': ' + e, 'error')
     }
   })
+  } // end if isQingchenFeatureAvailable
 
   const resultEl = overlay.querySelector('#ast-test-result')
   const modelInput = overlay.querySelector('#ast-model')
