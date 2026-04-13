@@ -823,7 +823,7 @@ async function checkGlobalUpdate() {
           ${changelog ? `<span class="update-banner-changelog">· ${changelog}</span>` : ''}
         </div>
         <a class="btn btn-sm" href="https://claw.qt.cool" target="_blank" rel="noopener">${t('about.downloadFromWebsite')}</a>
-        <a class="btn btn-sm" href="https://github.com/qingchencloud/clawpanel/releases" target="_blank" rel="noopener">${t('about.downloadFromGitHub')}</a>
+        <a class="btn btn-sm" href="https://github.com/ethanwwan/clawpanel/releases" target="_blank" rel="noopener">${t('about.downloadFromGitHub')}</a>
         <button class="update-banner-close" id="btn-update-dismiss" title="${t('about.dismissVersion')}">✕</button>
       </div>
     `
