@@ -21,22 +21,13 @@ const FEATURE_MIN_VERSIONS = {
   memory: '0.8.0',
 }
 
-let _panelConfig = null
-
-export async function loadPanelConfig() {
-  try {
-    _panelConfig = await api.get_panel_config()
-    window.__qingchenFeatureAvailable = _panelConfig?.qingchenFeatureAvailable !== false
-  } catch {}
-}
+let _cachedVersion = null
+let _cacheTime = 0
+const CACHE_TTL = 60000
 
 export function isQingchenFeatureAvailable() {
   return false
 }
-
-let _cachedVersion = null
-let _cacheTime = 0
-const CACHE_TTL = 60000
 
 /**
  * 解析版本号为可比较的数组 [major, minor, patch]
@@ -124,10 +115,7 @@ export async function checkFeatureAvailable(featureId) {
  * 初始化：预加载版本信息
  */
 export async function initFeatureGates() {
-  await Promise.all([
-    getCurrentVersion(),
-    loadPanelConfig(),
-  ])
+  await getCurrentVersion()
 }
 
 /**
