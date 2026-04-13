@@ -303,6 +303,17 @@ export function renderSidebar(el) {
         _closeEngineDropdown()
         if (eid !== getActiveEngineId()) {
           engineOpt.style.opacity = '0.5'
+          // 立即在内容区显示加载骨架，避免切换期间空白
+          const contentEl = document.getElementById('content')
+          if (contentEl) {
+            contentEl.innerHTML = `<div class="page" style="padding:32px">
+              <div class="skeleton-line" style="width:200px;height:28px;margin-bottom:24px"></div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:20px">
+                ${[1,2,3].map(() => '<div class="card"><div class="card-body" style="padding:16px"><div class="skeleton-line" style="width:60%;height:12px;margin-bottom:10px"></div><div class="skeleton-line" style="width:80%;height:20px"></div></div></div>').join('')}
+              </div>
+              <div class="card"><div class="card-body" style="padding:20px"><div class="skeleton-line" style="width:40%;height:16px;margin-bottom:16px"></div><div class="skeleton-line" style="height:36px"></div></div></div>
+            </div>`
+          }
           switchEngine(eid).then(() => {
             toast(t('engine.switchedTo', { name: getActiveEngine()?.name || eid }), 'success')
             renderSidebar(el)
