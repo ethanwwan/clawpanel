@@ -59,7 +59,7 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/ClawPanel_${{ env.VERSION }}_aarch64.dmg
+            src-tauri/target/release/bundle/dmg/ClawPanel_${{ env.VERSION }}_aarch64.dmg
           body: |
             # 📥 下载安装
 
