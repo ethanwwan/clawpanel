@@ -9,6 +9,7 @@ import { setUpgrading } from '../lib/app-state.js'
 import { icon, statusIcon } from '../lib/icons.js'
 import { t, getLang } from '../lib/i18n.js'
 import { getActiveEngineId } from '../lib/engine-manager.js'
+import { isQingchenFeatureAvailable } from '../lib/feature-gates.js'
 
 export async function render() {
   const page = document.createElement('div')
@@ -58,11 +59,13 @@ export async function render() {
   } else {
     loadData(page)
   }
-  renderCommunity(page)
+  if (isQingchenFeatureAvailable()) {
+    renderCommunity(page)
+    renderCompany(page)
+  }
   renderProjects(page)
   renderContribute(page)
   renderLinks(page)
-  renderCompany(page)
   return page
 }
 

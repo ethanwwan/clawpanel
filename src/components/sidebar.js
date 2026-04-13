@@ -17,7 +17,7 @@ function NAV_ITEMS_FULL() { return [
     section: t('sidebar.sectionMonitor'),
     items: [
       { route: '/dashboard', label: t('sidebar.dashboard'), icon: 'dashboard' },
-      ...(isQingchenFeatureAvailable() ? [{ route: '/assistant', label: t('sidebar.assistant'), icon: 'assistant' }] : []),
+      { route: '/assistant', label: t('sidebar.assistant'), icon: 'assistant' },
       { route: '/chat', label: t('sidebar.chat'), icon: 'chat' },
       { route: '/route-map', label: t('sidebar.routeMap'), icon: 'route-map' },
       { route: '/services', label: t('sidebar.services'), icon: 'services' },
@@ -66,7 +66,7 @@ function NAV_ITEMS_SETUP() { return [
     section: '',
     items: [
       { route: '/setup', label: t('sidebar.setup'), icon: 'setup' },
-      ...(isQingchenFeatureAvailable() ? [{ route: '/assistant', label: t('sidebar.assistant'), icon: 'assistant' }] : []),
+      { route: '/assistant', label: t('sidebar.assistant'), icon: 'assistant' },
     ]
   },
   {
@@ -231,10 +231,12 @@ export function renderSidebar(el) {
           <div class="lang-options" id="lang-options">${langOptions}</div>
         </div>
       </div>
+      ${isQingchenFeatureAvailable() ? `
       <div class="sidebar-meta">
         <a href="https://claw.qt.cool" target="_blank" rel="noopener" class="sidebar-link">claw.qt.cool</a>
         <span class="sidebar-version">v${APP_VERSION}</span>
       </div>
+      ` : ''}
     </div>
   `
 
