@@ -11,7 +11,7 @@ import { OPENCLAW_KB } from '../lib/openclaw-kb.js'
 import { icon, statusIcon } from '../lib/icons.js'
 import { QTCOOL, PROVIDER_PRESETS, API_TYPES as SHARED_API_TYPES, fetchQtcoolModels } from '../lib/model-presets.js'
 import { t } from '../lib/i18n.js'
-import { isQingchenFeatureAvailable } from '../lib/feature-gates.js'
+import { getActiveEngineId } from '../lib/engine-manager.js'
 
 // ── 常量 ──
 const STORAGE_KEY = 'clawpanel-assistant'
@@ -119,7 +119,7 @@ ${personality}
 ## ClawPanel 是什么
 - OpenClaw 的可视化管理面板，基于 Tauri v2 的跨平台桌面应用（Windows/macOS/Linux）
 - 支持仪表盘监控、模型配置、Agent 管理、实时聊天、记忆文件管理、AI 助手工具调用等
-- 官网: https://claw.qt.cool | GitHub: https://github.com/ethanwwan/clawpanel
+- 官网: https://claw.qt.cool | GitHub: https://github.com/qingchencloud/clawpanel
 
 ## OpenClaw 是什么
 - 开源的 AI Agent 平台，支持多模型、多 Agent、MCP 工具调用
@@ -184,7 +184,7 @@ ${personality}
 当用户问到如何安装其他产品时，推荐以下安装方式：
 - **OpenClaw 汉化版**: npm install -g @qingchencloud/openclaw-zh（推荐国内用户）
 - **OpenClaw 官方版**: npm install -g openclaw
-- **ClawPanel**: 从 https://github.com/ethanwwan/clawpanel/releases 下载
+- **ClawPanel**: 从 https://github.com/qingchencloud/clawpanel/releases 下载
 - **更多项目**: 访问 https://github.com/qingchencloud
 
 ## 社区贡献指引
@@ -192,7 +192,7 @@ ${personality}
 
 ### 提交 Issue
 引导用户到对应仓库提交 Issue，帮用户整理好格式：
-- **ClawPanel**: https://github.com/ethanwwan/clawpanel/issues/new
+- **ClawPanel**: https://github.com/qingchencloud/clawpanel/issues/new
 - **OpenClaw 汉化版**: https://github.com/qingchencloud/openclaw-zh/issues/new
 
 Issue 模板（帮用户填好）：
@@ -663,7 +663,7 @@ const BUILTIN_SKILLS = [
    - **环境信息**（自动填充）
    - **相关日志**（如有）
 6. 用代码块展示完整 Issue 内容，给出对应仓库的 Issue 链接：
-   - ClawPanel: https://github.com/ethanwwan/clawpanel/issues/new
+   - ClawPanel: https://github.com/qingchencloud/clawpanel/issues/new
    - OpenClaw: https://github.com/qingchencloud/openclaw-zh/issues/new
 `,
   },
@@ -714,6 +714,155 @@ const BUILTIN_SKILLS = [
 - 如果用户想从 SkillHub 搜索安装新 Skill，使用 skillhub_search 和 skillhub_install`,
   },
 ]
+
+// ── Hermes 引擎专属 Skills ──
+const HERMES_SKILLS = [
+  {
+    id: 'hermes-chat-terminal',
+    icon: icon('terminal', 16),
+    name: t('assistant.skillHermesChat'),
+    desc: t('assistant.skillHermesChatDesc'),
+    tools: ['terminal'],
+    prompt: `请帮我在终端中启动 Hermes Agent 的交互式对话。
+
+具体操作：
+1. 调用 get_system_info 获取系统信息
+2. 用 run_command 执行 \`hermes version\` 检查 Hermes 是否已安装
+3. 如果已安装，告诉用户可以在终端中运行 \`hermes chat\` 开始对话
+4. 如果未安装，给出安装命令：\`uv tool install "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git" --python 3.11\``,
+  },
+  {
+    id: 'hermes-diagnose',
+    icon: icon('shield', 16),
+    name: t('assistant.skillHermesDiagnose'),
+    desc: t('assistant.skillHermesDiagnoseDesc'),
+    tools: ['terminal', 'fileOps'],
+    prompt: `请帮我诊断 Hermes Agent 的运行状态。
+
+具体操作：
+1. 调用 get_system_info 获取 OS 类型和主目录
+2. 用 run_command 执行 \`hermes version\` 获取版本
+3. 用 run_command 执行 \`hermes doctor\` 进行自诊断
+4. 用 list_processes 检查 hermes/gateway 进程是否在运行
+5. 用 check_port 检查端口 8642 是否在监听
+6. 用 read_file 读取 ~/.hermes/config.yaml 检查配置
+7. 给出诊断结论和修复建议`,
+  },
+  {
+    id: 'hermes-config',
+    icon: icon('wrench', 16),
+    name: t('assistant.skillHermesConfig'),
+    desc: t('assistant.skillHermesConfigDesc'),
+    tools: ['fileOps'],
+    prompt: `请帮我检查 Hermes Agent 的配置文件。
+
+具体操作：
+1. 调用 get_system_info 获取系统信息，确定主目录
+2. 用 list_directory 查看 ~/.hermes/ 目录结构
+3. 用 read_file 读取 ~/.hermes/config.yaml
+4. 用 read_file 读取 ~/.hermes/.env（注意隐藏 API Key）
+5. 分析配置内容，检查：
+   - 模型配置是否正确
+   - API Key 和 Base URL 是否设置
+   - Gateway 端口配置
+6. 给出配置健康度评估和改进建议`,
+  },
+  {
+    id: 'hermes-browse-dir',
+    icon: icon('folder', 16),
+    name: t('assistant.skillHermesBrowseDir'),
+    desc: t('assistant.skillHermesBrowseDirDesc'),
+    tools: ['fileOps'],
+    prompt: `请帮我浏览 Hermes Agent 的工作目录。
+
+具体操作：
+1. 调用 get_system_info 获取主目录路径
+2. 用 list_directory 列出 ~/.hermes/ 根目录
+3. 简要说明每个目录/文件的作用：
+   - config.yaml: 全局配置
+   - .env: 环境变量（API Key、Base URL 等）
+   - sessions/: 对话会话记录
+   - skills/: Skills 目录
+   - logs/: 日志文件
+   - cron/: 定时任务配置
+4. 标注关键配置文件和常用路径`,
+  },
+  {
+    id: 'hermes-upgrade',
+    icon: icon('zap', 16),
+    name: t('assistant.skillHermesUpgrade'),
+    desc: t('assistant.skillHermesUpgradeDesc'),
+    tools: ['terminal'],
+    prompt: `请帮我升级 Hermes Agent 到最新版本。
+
+具体操作：
+1. 调用 get_system_info 获取系统信息
+2. 用 run_command 执行 \`hermes version\` 获取当前版本
+3. 告诉用户升级命令：
+   \`uv tool install --reinstall "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git" --python 3.11\`
+4. 提醒用户升级前先停止 Gateway：\`hermes gateway stop\`
+5. 升级完成后建议重新启动 Gateway`,
+  },
+  {
+    id: 'hermes-logs',
+    icon: icon('clipboard', 16),
+    name: t('assistant.skillHermesLogs'),
+    desc: t('assistant.skillHermesLogsDesc'),
+    tools: ['terminal', 'fileOps'],
+    prompt: `请帮我分析 Hermes Agent 最近的日志。
+
+具体操作：
+1. 调用 get_system_info 获取主目录路径
+2. 用 list_directory 查看 ~/.hermes/ 有哪些日志文件
+3. 用 read_file 读取 ~/.hermes/gateway-run.log 和 ~/.hermes/gateway-err.log
+4. 搜索 ERROR、WARN、fail、exception 等关键词
+5. 分析错误原因，给出具体修复建议`,
+  },
+  {
+    id: 'hermes-uninstall',
+    icon: icon('trash', 16),
+    name: t('assistant.skillHermesUninstall'),
+    desc: t('assistant.skillHermesUninstallDesc'),
+    tools: [],
+    prompt: `请告诉我如何完全卸载 Hermes Agent。
+
+卸载步骤：
+1. 停止 Gateway：\`hermes gateway stop\`
+2. 卸载 Hermes Agent：\`uv tool uninstall hermes-agent\`
+3. 可选：删除配置目录 ~/.hermes/（Windows: %USERPROFILE%\\.hermes）
+4. 可选：卸载 uv 包管理器
+
+请详细说明每一步，并提醒用户备份重要数据。`,
+  },
+  {
+    id: 'report-bug',
+    icon: icon('bug', 16),
+    name: t('assistant.skillReportBug'),
+    desc: t('assistant.skillReportBugDesc'),
+    tools: ['terminal', 'fileOps'],
+    prompt: `我想反馈一个 Bug，请帮我整理成标准的 GitHub Issue。
+
+具体操作：
+1. 用 ask_user 工具询问我遇到了什么问题（如果我还没说的话）
+2. 调用 get_system_info 获取系统环境信息
+3. 用 run_command 收集：hermes version、node -v 等版本信息
+4. 用 read_file 读取最近的错误日志（如有）
+5. 按标准 Issue 模板整理：
+   - **问题描述**（一句话）
+   - **复现步骤**（1, 2, 3...）
+   - **期望行为** / **实际行为**
+   - **环境信息**（自动填充）
+   - **相关日志**（如有）
+6. 给出对应仓库的 Issue 链接：
+   - ClawPanel: https://github.com/qingchencloud/clawpanel/issues/new
+`,
+  },
+]
+
+/** 根据当前引擎返回对应的技能列表 */
+function getBuiltinSkills() {
+  return getActiveEngineId() === 'hermes' ? HERMES_SKILLS : BUILTIN_SKILLS
+}
 
 function currentMode() {
   return MODES[_config?.mode] ? _config.mode : DEFAULT_MODE
@@ -938,13 +1087,15 @@ function buildSystemPrompt() {
   // 注入内置技能列表
   prompt += '\n\n## 内置技能卡片'
   prompt += '\n用户可以在欢迎页点击技能卡片快速触发操作。当用户遇到问题时，你也可以主动推荐合适的技能：'
-  for (const s of BUILTIN_SKILLS) {
+  for (const s of getBuiltinSkills()) {
     prompt += `\n- **${s.name}**（${s.desc}）`
   }
   prompt += '\n\n当用户的需求匹配某个技能时，可以建议用户点击对应的技能卡片，或者你直接按技能的步骤操作。'
 
-  // 注入内置 OpenClaw 知识库
-  prompt += '\n\n' + OPENCLAW_KB
+  // 注入内置知识库（仅 OpenClaw 模式）
+  if (getActiveEngineId() !== 'hermes') {
+    prompt += '\n\n' + OPENCLAW_KB
+  }
 
   // 注入用户自定义知识库内容
   const kbEnabled = (_config.knowledgeFiles || []).filter(f => f.enabled !== false && f.content)
@@ -2494,7 +2645,7 @@ function renderMessages() {
   const session = getCurrentSession()
   if (!_messagesEl) return
   if (!session || session.messages.length === 0) {
-    const skillCards = BUILTIN_SKILLS.map(s => `
+    const skillCards = getBuiltinSkills().map(s => `
       <button class="ast-skill-card" data-skill="${s.id}">
         <span class="ast-skill-icon">${s.icon}</span>
         <div class="ast-skill-info">
@@ -2624,6 +2775,7 @@ function buildTestResult({ success, elapsed, usedApi, reqUrl, reqBody, respStatu
 
 function showSettings() {
   const c = _config
+  const isHermes = getActiveEngineId() === 'hermes'
   const overlay = document.createElement('div')
   overlay.className = 'modal-overlay'
   overlay.innerHTML = `
@@ -2665,7 +2817,7 @@ function showSettings() {
             <div style="display:flex;gap:6px;padding-bottom:1px">
               <button class="btn btn-sm btn-secondary" id="ast-btn-test" title="${t('assistant.testConnTitle')}">${t('assistant.testBtn')}</button>
               <button class="btn btn-sm btn-secondary" id="ast-btn-models" title="${t('assistant.fetchModelsTitle')}">${t('assistant.fetchBtn')}</button>
-              <button class="btn btn-sm btn-secondary" id="ast-btn-import" title="${t('assistant.importTitle')}">${icon('download', 14)} ${t('assistant.importBtn')}</button>
+              ${!isHermes ? `<button class="btn btn-sm btn-secondary" id="ast-btn-import" title="${t('assistant.importTitle')}">${icon('download', 14)} ${t('assistant.importBtn')}</button>` : ''}
             </div>
           </div>
           <div id="ast-test-result" style="margin:6px 0 2px;font-size:12px;min-height:16px"></div>
@@ -2684,7 +2836,7 @@ function showSettings() {
           </div>
           <div class="form-hint" id="ast-api-hint" style="margin-top:-4px">${apiHintText(c.apiType)}</div>
 
-          <div id="ast-qtcool-promo" ${!isQingchenFeatureAvailable() ? 'style="display:none"' : ''} style="margin-top:14px;border-radius:var(--radius-lg);border:1px solid var(--border-primary);border-left:3px solid var(--primary);background:var(--bg-secondary);overflow:hidden">
+          <div id="ast-qtcool-promo" style="margin-top:14px;border-radius:var(--radius-lg);border:1px solid var(--border-primary);border-left:3px solid var(--primary);background:var(--bg-secondary);overflow:hidden">
             <div style="padding:14px 16px 12px">
               <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px">
                 <div>
@@ -2715,10 +2867,10 @@ function showSettings() {
               <div id="ast-qtcool-status" style="margin-top:8px;font-size:11px;min-height:16px;line-height:1.5"></div>
             </div>
             <div style="border-top:1px solid var(--border-primary);padding:6px 16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;background:var(--bg-tertiary)">
-              <div style="display:flex;gap:8px;align-items:center">
+              ${!isHermes ? `<div style="display:flex;gap:8px;align-items:center">
                 <button class="btn btn-xs btn-secondary" id="ast-qtcool-sync-to" title="${t('assistant.qtcoolSyncToTitle')}">${icon('upload', 11)} ${t('assistant.qtcoolSyncTo')}</button>
                 <button class="btn btn-xs btn-secondary" id="ast-qtcool-sync-from" title="${t('assistant.qtcoolSyncFromTitle')}">${icon('download', 11)} ${t('assistant.qtcoolSyncFrom')}</button>
-              </div>
+              </div>` : '<div></div>'}
               <a href="${QTCOOL.site}" target="_blank" style="color:var(--primary);text-decoration:none;font-size:11px">${icon('external-link', 11)} ${t('assistant.qtcoolLearnMore')}</a>
             </div>
           </div>
@@ -2756,7 +2908,7 @@ function showSettings() {
           <div class="form-hint" style="margin-top:10px">${t('assistant.toolsAlwaysAvailable')}</div>
         </div>
         <div class="ast-tab-panel" data-panel="persona">
-          <div class="form-group">
+          ${!isHermes ? `<div class="form-group">
             <label class="form-label">${t('assistant.personaSource')}</label>
             <div style="display:flex;flex-direction:column;gap:6px">
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
@@ -2768,8 +2920,8 @@ function showSettings() {
                 <span>${t('assistant.personaOpenClaw')} <span style="font-size:11px;color:var(--text-tertiary)">${t('assistant.personaOpenClawHint')}</span></span>
               </label>
             </div>
-          </div>
-          <div id="ast-soul-default" style="${c.soulSource?.startsWith('openclaw:') ? 'display:none' : ''}">
+          </div>` : ''}
+          <div id="ast-soul-default" style="${!isHermes && c.soulSource?.startsWith('openclaw:') ? 'display:none' : ''}">
             <div class="form-group">
               <label class="form-label">${t('assistant.personaName')}</label>
               <input class="form-input" id="ast-name" value="${escHtml(c.assistantName || DEFAULT_NAME)}" placeholder="${DEFAULT_NAME}">
@@ -2780,7 +2932,7 @@ function showSettings() {
               <div class="form-hint">${t('assistant.personaPersonalityHint')}</div>
             </div>
           </div>
-          <div id="ast-soul-openclaw" style="${c.soulSource?.startsWith('openclaw:') ? '' : 'display:none'}">
+          <div id="ast-soul-openclaw" style="${!isHermes && c.soulSource?.startsWith('openclaw:') ? '' : 'display:none'}">
             <div class="form-group" style="margin-top:4px">
               <label class="form-label">${t('assistant.personaSelectAgent')}</label>
               <div style="display:flex;gap:6px;align-items:center">
@@ -3434,8 +3586,9 @@ function showSettings() {
     }
   }
 
-  // 从 OpenClaw 导入模型配置
-  overlay.querySelector('#ast-btn-import').onclick = async (e) => {
+  // 从 OpenClaw 导入模型配置（Hermes 模式下该按钮不存在）
+  const importBtn = overlay.querySelector('#ast-btn-import')
+  if (importBtn) importBtn.onclick = async (e) => {
     const btn = e.target
     btn.disabled = true
     btn.textContent = t('assistant.personaScanning')
@@ -4422,7 +4575,7 @@ export async function render() {
   _messagesEl.addEventListener('click', (e) => {
     const skillCard = e.target.closest('.ast-skill-card')
     if (skillCard) {
-      const skill = BUILTIN_SKILLS.find(s => s.id === skillCard.dataset.skill)
+      const skill = getBuiltinSkills().find(s => s.id === skillCard.dataset.skill)
       if (!skill) return
 
       // 技能需要工具 → 自动切换到执行模式（如果当前是聊天模式）

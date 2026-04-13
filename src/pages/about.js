@@ -4,10 +4,11 @@
  */
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
-import { showUpgradeModal, showConfirm } from '../components/modal.js'
+import { showUpgradeModal, showConfirm, showContentModal } from '../components/modal.js'
 import { setUpgrading } from '../lib/app-state.js'
 import { icon, statusIcon } from '../lib/icons.js'
 import { t, getLang } from '../lib/i18n.js'
+import { getActiveEngineId } from '../lib/engine-manager.js'
 
 export async function render() {
   const page = document.createElement('div')
@@ -26,10 +27,10 @@ export async function render() {
       <div class="stat-card loading-placeholder"></div>
       <div class="stat-card loading-placeholder"></div>
     </div>
-    <!-- <div class="config-section">
+    <div class="config-section">
       <div class="config-section-title">${t('about.sectionCommunity')}</div>
       <div id="community-section"></div>
-    </div> -->
+    </div>
     <div class="config-section">
       <div class="config-section-title">${t('about.sectionProjects')}</div>
       <div id="projects-list"></div>
@@ -42,23 +43,185 @@ export async function render() {
       <div class="config-section-title">${t('about.sectionLinks')}</div>
       <div id="links-list"></div>
     </div>
-    <!-- <div class="config-section">
+    <div class="config-section">
       <div class="config-section-title">${t('about.sectionAboutUs')}</div>
       <div id="company-section"></div>
-    </div> -->
+    </div>
     <div class="config-section" style="color:var(--text-tertiary);font-size:var(--font-size-xs)">
       <p>${t('about.techStack')}</p>
       <p style="margin-top:8px">${t('about.copyright')}</p>
     </div>
   `
 
-  loadData(page)
-  // renderCommunity(page)  // 隐藏
+  if (getActiveEngineId() === 'hermes') {
+    loadHermesData(page)
+  } else {
+    loadData(page)
+  }
+  renderCommunity(page)
   renderProjects(page)
   renderContribute(page)
   renderLinks(page)
-  // renderCompany(page)  // 隐藏
+  renderCompany(page)
   return page
+}
+
+async function loadHermesData(page) {
+  const cards = page.querySelector('#version-cards')
+  try {
+    const [hermesInfo, pythonInfo] = await Promise.all([
+      api.checkHermes().catch(() => null),
+      api.checkPython().catch(() => null),
+    ])
+
+    const panelVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0'
+
+    let panelUpdateHtml = `<span style="color:var(--text-tertiary)">${t('about.checkingUpdate')}</span>`
+    checkNewVersion(cards, panelVersion)
+
+    const installed = !!hermesInfo?.installed
+    const gwRunning = !!hermesInfo?.gatewayRunning
+    const version = hermesInfo?.hermesVersion || hermesInfo?.version || ''
+    const model = hermesInfo?.model || ''
+    const port = hermesInfo?.gatewayPort || 8642
+    const pyVer = pythonInfo?.version || ''
+    const pyPath = pythonInfo?.path || ''
+
+    const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+    const btnSm = 'padding:2px 8px;font-size:var(--font-size-xs)'
+
+    cards.innerHTML = `
+      <div class="stat-card">
+        <div class="stat-card-header"><span class="stat-card-label">ClawPanel</span></div>
+        <div class="stat-card-value">${panelVersion}</div>
+        <div class="stat-card-meta" id="panel-update-meta" style="display:flex;align-items:center;gap:8px">${panelUpdateHtml}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-header"><span class="stat-card-label">Hermes Agent</span></div>
+        <div class="stat-card-value">${installed ? (version || t('about.installed')) : t('about.notInstalled')}</div>
+        <div class="stat-card-meta" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${gwRunning
+            ? `<span style="color:var(--success)">● Gateway ${t('engine.dashRunning')} · :${port}</span>`
+            : `<span style="color:var(--text-tertiary)">○ Gateway ${t('engine.dashStopped')}</span>`}
+          ${model ? `<span style="color:var(--text-secondary)">${t('engine.dashModel')}: ${esc(model)}</span>` : ''}
+          ${!installed ? `<a class="btn btn-primary btn-sm" href="#/h/setup" style="${btnSm}">${t('about.hermesSetup')}</a>` : ''}
+          ${installed ? `
+            <button class="btn btn-secondary btn-sm" id="btn-hermes-config" style="${btnSm}">${t('about.hermesConfig')}</button>
+            <button class="btn btn-secondary btn-sm" id="btn-hermes-upgrade" style="${btnSm}">${t('about.hermesUpgrade')}</button>
+            <button class="btn btn-danger btn-sm" id="btn-hermes-uninstall" style="${btnSm}">${t('about.hermesUninstall')}</button>
+          ` : ''}
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-header"><span class="stat-card-label">Python</span></div>
+        <div class="stat-card-value" style="font-size:var(--font-size-sm)">${pyVer || t('about.notInstalled')}</div>
+        <div class="stat-card-meta" style="word-break:break-all">${esc(pyPath)}</div>
+      </div>
+    `
+
+    // Hermes 管理按钮事件
+    if (installed) {
+      // --- 配置模态框 ---
+      cards.querySelector('#btn-hermes-config')?.addEventListener('click', async () => {
+        try {
+          const cfg = await api.hermesReadConfig()
+          const maskedKey = cfg.api_key ? cfg.api_key.slice(0, 6) + '••••' + cfg.api_key.slice(-4) : t('about.notSet')
+          const overlay = showContentModal({
+            title: `Hermes Agent ${t('about.hermesConfig')}`,
+            width: 480,
+            content: `
+              <div style="display:grid;gap:12px;font-size:13px;line-height:1.6">
+                <div style="display:flex;gap:8px"><span style="color:var(--text-tertiary);min-width:90px">${t('engine.configProvider')}:</span><span style="word-break:break-all">${esc(cfg.provider || '-')}</span></div>
+                <div style="display:flex;gap:8px"><span style="color:var(--text-tertiary);min-width:90px">Base URL:</span><span style="word-break:break-all">${esc(cfg.base_url || '-')}</span></div>
+                <div style="display:flex;gap:8px"><span style="color:var(--text-tertiary);min-width:90px">API Key:</span><span style="font-family:monospace">${esc(maskedKey)}</span></div>
+                <div style="display:flex;gap:8px"><span style="color:var(--text-tertiary);min-width:90px">${t('engine.configModel')}:</span><span style="word-break:break-all">${esc(cfg.model_raw || cfg.model || '-')}</span></div>
+                <div style="display:flex;gap:8px"><span style="color:var(--text-tertiary);min-width:90px">${t('about.hermesConfigFile')}:</span><span style="color:${cfg.config_exists ? 'var(--success)' : 'var(--warning)'}">${cfg.config_exists ? '✓' : '✗'}</span></div>
+              </div>
+            `,
+            buttons: [
+              { label: t('about.hermesGoSetup'), className: 'btn btn-primary btn-sm', id: 'btn-goto-setup' },
+            ],
+          })
+          overlay.querySelector('#btn-goto-setup')?.addEventListener('click', () => {
+            overlay.close()
+            window.location.hash = '#/h/setup'
+          })
+        } catch (e) {
+          toast(t('common.loadFailed') + ': ' + (e.message || e), 'error')
+        }
+      })
+
+      // --- 升级模态框（带实时日志） ---
+      cards.querySelector('#btn-hermes-upgrade')?.addEventListener('click', async () => {
+        const confirmed = await showConfirm(t('about.hermesUpgradeConfirm'))
+        if (!confirmed) return
+
+        const modal = showUpgradeModal(t('about.hermesUpgrade') + ' Hermes Agent')
+        modal.setProgressLabels({
+          preparing: t('about.upgrading'),
+          downloading: t('about.upgrading'),
+          installing: t('about.upgrading'),
+          done: t('about.hermesUpgradeOk', { version: '' }),
+        })
+        modal.setProgress(10)
+
+        let unlisten = null
+        try {
+          const { listen } = await import('@tauri-apps/api/event')
+          unlisten = await listen('hermes-install-log', (e) => {
+            modal.appendLog(String(e.payload))
+          })
+        } catch (_) {}
+
+        modal.setProgress(20)
+        try {
+          const ver = await api.updateHermes()
+          modal.setProgress(100)
+          modal.setDone(t('about.hermesUpgradeOk', { version: ver || '' }))
+          modal.onClose(() => loadHermesData(page))
+        } catch (e) {
+          modal.appendLog(`❌ ${e.message || e}`)
+          modal.setError(t('about.hermesUpgradeFail', { error: e.message || e }))
+          modal.onClose(() => loadHermesData(page))
+        } finally {
+          if (unlisten) unlisten()
+        }
+      })
+
+      // --- 卸载模态框（确认 + 实时日志） ---
+      cards.querySelector('#btn-hermes-uninstall')?.addEventListener('click', async () => {
+        const confirmed = await showConfirm(t('about.hermesUninstallConfirm'))
+        if (!confirmed) return
+        const cleanConfig = await showConfirm(t('about.hermesUninstallCleanConfig'))
+
+        const modal = showUpgradeModal(t('about.hermesUninstall') + ' Hermes Agent')
+        modal.setProgressLabels({
+          preparing: t('about.uninstalling'),
+          downloading: t('about.uninstalling'),
+          installing: t('about.uninstalling'),
+          done: t('about.hermesUninstallOk'),
+        })
+        modal.appendLog('🗑️ ' + t('about.uninstalling'))
+        if (cleanConfig) modal.appendLog('📁 ' + t('about.hermesUninstallCleanConfigHint'))
+        modal.setProgress(30)
+
+        try {
+          const result = await api.uninstallHermes(cleanConfig)
+          modal.appendLog('✅ ' + (result || t('about.hermesUninstallOk')))
+          modal.setProgress(100)
+          modal.setDone(t('about.hermesUninstallOk'))
+          modal.onClose(() => loadHermesData(page))
+        } catch (e) {
+          modal.appendLog(`❌ ${e.message || e}`)
+          modal.setError(t('about.hermesUninstallFail', { error: e.message || e }))
+          modal.onClose(() => loadHermesData(page))
+        }
+      })
+    }
+  } catch {
+    cards.innerHTML = `<div class="stat-card"><div class="stat-card-label">${t('common.loadFailed')}</div></div>`
+  }
 }
 
 async function loadData(page) {
@@ -70,17 +233,10 @@ async function loadData(page) {
     ])
 
     // 尝试从 Tauri API 获取 ClawPanel 自身版本号，失败则 fallback
-    let panelVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0'
-    try {
-      const { getVersion } = await import('@tauri-apps/api/app')
-      panelVersion = await getVersion()
-    } catch {
-      // 非 Tauri 环境或 API 不可用，使用构建时注入的版本号
-    }
+    const panelVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0'
 
-    // 异步检查前端热更新
     let panelUpdateHtml = `<span style="color:var(--text-tertiary)">${t('about.checkingUpdate')}</span>`
-    checkHotUpdate(cards, panelVersion)
+    checkNewVersion(cards, panelVersion)
 
     const isInstalled = !!version.current
     const sourceLabel = version.source === 'official' ? t('about.official') : version.source === 'chinese' ? t('about.chinese') : t('about.unknownSource')
@@ -420,32 +576,54 @@ async function doInstall(page, title, source, version) {
   }
 }
 
-async function checkHotUpdate(cards, panelVersion) {
+async function checkNewVersion(cards, panelVersion) {
   const el = () => cards.querySelector('#panel-update-meta')
   const btnSm = 'padding:2px 8px;font-size:var(--font-size-xs)'
+
+  // 尝试获取 Tauri 二进制版本，检测「假更新」：
+  // 前端通过热更新升级到 v0.13.0，但 Tauri 二进制仍是 v0.9.9
+  let binaryVersion = panelVersion
   try {
-    const info = await api.checkFrontendUpdate()
+    const { getVersion } = await import('@tauri-apps/api/app')
+    binaryVersion = await getVersion()
+  } catch {}
+
+  // 前端版本 > 二进制版本 = 热更新导致版本不一致
+  const isFakeUpdate = binaryVersion !== panelVersion && compareVersions(panelVersion, binaryVersion) > 0
+
+  try {
+    const info = await api.checkPanelUpdate()
     const meta = el()
     if (!meta) return
 
-    if (info.hasUpdate || info.updateReady) {
-      const ver = info.latestVersion || info.manifest?.version || ''
-      const changelog = info.manifest?.changelog || ''
+    const latest = info?.latest || ''
+    // 用二进制版本（真实应用版本）做比较，避免假更新导致误判为「已是最新」
+    const effectiveVersion = isFakeUpdate ? binaryVersion : panelVersion
+
+    if (isFakeUpdate) {
       meta.innerHTML = `
-        <span style="color:var(--accent)">${t('about.newVersion')}: v${ver}</span>
-        ${changelog ? `<span style="color:var(--text-tertiary);font-size:var(--font-size-xs)">${changelog}</span>` : ''}
-        <a class="btn btn-primary btn-sm" href="https://claw.qt.cool" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromWebsite')}</a>
-        <a class="btn btn-secondary btn-sm" href="https://github.com/ethanwwan/clawpanel/releases" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromGitHub')}</a>
+        <span style="color:var(--warning)">⚠️ ${t('about.versionMismatch', { frontend: panelVersion, binary: binaryVersion })}</span>
+        <span style="color:var(--text-tertiary);font-size:var(--font-size-xs)">${t('about.hotUpdateDeprecated')}</span>
+        <a class="btn btn-primary btn-sm" href="https://claw.qt.cool" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFullInstaller')}</a>
+        <a class="btn btn-secondary btn-sm" href="${info.url || 'https://github.com/qingchencloud/clawpanel/releases'}" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromGitHub')}</a>
       `
-    } else if (!info.compatible) {
-      meta.innerHTML = `<span style="color:var(--text-tertiary)">${t('about.needFullUpdate')}</span> <a class="btn btn-primary btn-sm" href="https://claw.qt.cool" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromWebsite')}</a> <a class="btn btn-secondary btn-sm" href="https://github.com/ethanwwan/clawpanel/releases" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromGitHub')}</a>`
+    } else if (latest && latest !== effectiveVersion && compareVersions(latest, effectiveVersion) > 0) {
+      meta.innerHTML = `
+        <span style="color:var(--accent)">${t('about.newVersionAvailable', { version: latest })}</span>
+        <a class="btn btn-primary btn-sm" href="https://claw.qt.cool" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromWebsite')}</a>
+        <a class="btn btn-secondary btn-sm" href="${info.url || 'https://github.com/qingchencloud/clawpanel/releases'}" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFromGitHub')}</a>
+      `
     } else {
       meta.innerHTML = `<span style="color:var(--success)">${t('about.upToDate')}</span>`
     }
   } catch (err) {
     const meta = el()
     if (!meta) return
-    meta.innerHTML = `<span style="color:var(--text-tertiary)">${t('about.checkUpdateFailed')}</span> <a class="btn btn-secondary btn-sm" href="https://claw.qt.cool" target="_blank" rel="noopener" style="${btnSm}">${t('about.goToWebsite')}</a>`
+    if (isFakeUpdate) {
+      meta.innerHTML = `<span style="color:var(--warning)">⚠️ ${t('about.versionMismatch', { frontend: panelVersion, binary: binaryVersion })}</span> <a class="btn btn-primary btn-sm" href="https://claw.qt.cool" target="_blank" rel="noopener" style="${btnSm}">${t('about.downloadFullInstaller')}</a>`
+    } else {
+      meta.innerHTML = `<span style="color:var(--text-tertiary)">${t('about.checkUpdateFailed')}</span> <a class="btn btn-secondary btn-sm" href="https://claw.qt.cool" target="_blank" rel="noopener" style="${btnSm}">${t('about.goToWebsite')}</a>`
+    }
   }
 }
 
@@ -515,7 +693,7 @@ const PROJECTS = [
   {
     name: 'ClawPanel',
     desc: t('about.projectClawPanel'),
-    url: 'https://github.com/ethanwwan/clawpanel',
+    url: 'https://github.com/qingchencloud/clawpanel',
     gitee: 'https://gitee.com/QtCodeCreators/clawpanel',
   },
   {
@@ -562,10 +740,10 @@ function renderContribute(page) {
       ${t('about.contributeDesc')}
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:8px">
-      <a class="btn btn-primary btn-sm" href="https://github.com/ethanwwan/clawpanel/issues/new" target="_blank" rel="noopener">${t('about.submitIssue')}</a>
-      <a class="btn btn-secondary btn-sm" href="https://github.com/ethanwwan/clawpanel/pulls" target="_blank" rel="noopener">${t('about.submitPR')}</a>
-      <a class="btn btn-secondary btn-sm" href="https://github.com/ethanwwan/clawpanel/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">${t('about.contributeGuide')}</a>
-      <a class="btn btn-secondary btn-sm" href="https://github.com/ethanwwan/clawpanel/issues" target="_blank" rel="noopener">${t('about.viewIssues')}</a>
+      <a class="btn btn-primary btn-sm" href="https://github.com/qingchencloud/clawpanel/issues/new" target="_blank" rel="noopener">${t('about.submitIssue')}</a>
+      <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/clawpanel/pulls" target="_blank" rel="noopener">${t('about.submitPR')}</a>
+      <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/clawpanel/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">${t('about.contributeGuide')}</a>
+      <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/clawpanel/issues" target="_blank" rel="noopener">${t('about.viewIssues')}</a>
     </div>
     <div style="margin-top:8px;font-size:var(--font-size-xs);color:var(--text-tertiary)">
       ${t('about.domesticMirrorHint')}

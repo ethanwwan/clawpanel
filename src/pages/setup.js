@@ -6,6 +6,7 @@ import { api, invalidate } from '../lib/tauri-api.js'
 import { showConfirm, showUpgradeModal } from '../components/modal.js'
 import { toast } from '../components/toast.js'
 import { setUpgrading, isMacPlatform } from '../lib/app-state.js'
+import { getActiveEngine } from '../lib/engine-manager.js'
 import { diagnoseInstallError } from '../lib/error-diagnosis.js'
 import { icon, statusIcon } from '../lib/icons.js'
 import { t } from '../lib/i18n.js'
@@ -186,6 +187,17 @@ async function runDetect(page) {
   // Git 已安装时，自动配置 HTTPS 替代 SSH（静默执行）
   if (git.installed) {
     api.configureGitHttps().catch(() => {})
+  }
+
+  const nodeOk = node.installed
+  const allOk = nodeOk && cliOk && config.installed
+
+  // 全部通过 → 自动跳转到仪表盘
+  if (allOk) {
+    const engine = getActiveEngine()
+    if (engine?.detect) await engine.detect()
+    window.location.hash = '/dashboard'
+    return
   }
 
   renderSteps(page, { node, git, cliOk, config, version })
@@ -582,19 +594,16 @@ function bindEvents(page, nodeOk, detectState) {
     window.location.hash = '/assistant'
   })
 
-  // 进入面板
-  page.querySelector('#btn-enter')?.addEventListener('click', () => {
-    window.location.hash = '/dashboard'
-  })
-  page.querySelector('#btn-goto-models')?.addEventListener('click', () => {
-    window.location.hash = '/models'
-  })
-  page.querySelector('#btn-goto-gateway')?.addEventListener('click', () => {
-    window.location.hash = '/gateway'
-  })
-  page.querySelector('#btn-goto-channels')?.addEventListener('click', () => {
-    window.location.hash = '/channels'
-  })
+  // 进入面板（刷新引擎 ready 状态，触发侧边栏更新）
+  async function refreshAndNavigate(route) {
+    const engine = getActiveEngine()
+    if (engine?.detect) await engine.detect()
+    window.location.hash = route
+  }
+  page.querySelector('#btn-enter')?.addEventListener('click', () => refreshAndNavigate('/dashboard'))
+  page.querySelector('#btn-goto-models')?.addEventListener('click', () => refreshAndNavigate('/models'))
+  page.querySelector('#btn-goto-gateway')?.addEventListener('click', () => refreshAndNavigate('/gateway'))
+  page.querySelector('#btn-goto-channels')?.addEventListener('click', () => refreshAndNavigate('/channels'))
 
   // 一键安装 Git
   page.querySelector('#btn-auto-install-git')?.addEventListener('click', async () => {

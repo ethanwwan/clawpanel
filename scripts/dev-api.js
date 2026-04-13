@@ -15,6 +15,83 @@ import crypto from 'crypto'
 import * as skillhubSdk from './lib/skillhub-sdk.js'
 const DOCKER_TASK_TIMEOUT_MS = 10 * 60 * 1000
 
+// ---------------------------------------------------------------------------
+// Hermes Agent — 路径 / 工具函数
+// ---------------------------------------------------------------------------
+const HERMES_HOME = path.join(homedir(), '.hermes')
+const HERMES_DEFAULT_PORT = 8642
+
+function hermesHome() {
+  return process.env.HERMES_HOME || HERMES_HOME
+}
+
+function uvBinDir() {
+  if (isWindows) {
+    const appdata = process.env.APPDATA
+    if (appdata) return path.join(appdata, 'clawpanel', 'bin')
+    return path.join(homedir(), '.clawpanel', 'bin')
+  }
+  if (isMac) return path.join(homedir(), 'Library', 'Application Support', 'clawpanel', 'bin')
+  return path.join(homedir(), '.local', 'share', 'clawpanel', 'bin')
+}
+
+function hermesEnhancedPath() {
+  const current = process.env.PATH || ''
+  const home = homedir()
+  const extra = [uvBinDir()]
+  if (isWindows) {
+    const appdata = process.env.APPDATA || ''
+    if (appdata) extra.push(path.join(appdata, 'uv', 'tools', 'bin'))
+    extra.push(path.join(home, '.local', 'bin'))
+    extra.push(path.join(home, '.cargo', 'bin'))
+  } else {
+    extra.push(path.join(home, '.local', 'bin'))
+    extra.push(path.join(home, '.cargo', 'bin'))
+    extra.push('/usr/local/bin')
+  }
+  const sep = isWindows ? ';' : ':'
+  return [...extra, current].filter(Boolean).join(sep)
+}
+
+function hermesGatewayPort() {
+  const configPath = path.join(hermesHome(), 'config.yaml')
+  try {
+    const content = fs.readFileSync(configPath, 'utf8')
+    for (const line of content.split('\n')) {
+      const m = line.trim().match(/^api_server_port:\s*(\d+)/)
+      if (m) { const p = parseInt(m[1], 10); if (p > 0) return p }
+    }
+  } catch {}
+  return HERMES_DEFAULT_PORT
+}
+
+function hermesGatewayUrl() {
+  try {
+    const cfg = readPanelConfig()
+    const url = cfg?.hermes?.gatewayUrl
+    if (url && typeof url === 'string' && url.trim()) return url.trim().replace(/\/+$/, '')
+  } catch {}
+  return `http://127.0.0.1:${hermesGatewayPort()}`
+}
+
+function runHermesSilent(program, args) {
+  try {
+    const result = spawnSync(program, args, {
+      env: { ...process.env, PATH: hermesEnhancedPath() },
+      timeout: 15000,
+      windowsHide: true,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    if (result.status === 0) return { ok: true, stdout: (result.stdout || '').trim() }
+    return { ok: false, stderr: (result.stderr || '').trim() }
+  } catch (e) {
+    return { ok: false, stderr: String(e) }
+  }
+}
+
+let _hermesGwProcess = null
+
 const __dev_dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_OPENCLAW_DIR = path.join(homedir(), '.openclaw')
 let OPENCLAW_DIR = DEFAULT_OPENCLAW_DIR
@@ -235,8 +312,6 @@ function readVersionFromInstallation(cliPath) {
   if (!resolved || !fs.existsSync(resolved)) return null
   const dir = path.dirname(resolved)
   const versionFile = path.join(dir, 'VERSION')
-  
-  // 1. 查找 VERSION 文件
   try {
     if (fs.existsSync(versionFile)) {
       const lines = fs.readFileSync(versionFile, 'utf8').split(/\r?\n/)
@@ -248,17 +323,6 @@ function readVersionFromInstallation(cliPath) {
       }
     }
   } catch {}
-  
-  // 2. 直接在当前目录查找 package.json（适用于符号链接指向的实际文件目录）
-  try {
-    const pkgPath = path.join(dir, 'package.json')
-    if (fs.existsSync(pkgPath)) {
-      const version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
-      if (version) return version
-    }
-  } catch {}
-  
-  // 3. 查找 node_modules 目录
   const cliSource = classifyCliSource(resolved)
   const pkgNames = (cliSource === 'standalone' || cliSource === 'npm-zh')
     ? [path.join('@qingchencloud', 'openclaw-zh'), 'openclaw']
@@ -276,25 +340,6 @@ function readVersionFromInstallation(cliPath) {
       } catch {}
     }
   }
-  
-  // 4. 特殊处理 Homebrew 安装
-  if (isMac) {
-    try {
-      // ARM Homebrew
-      const brewPkgPath = '/opt/homebrew/lib/node_modules/openclaw/package.json'
-      if (fs.existsSync(brewPkgPath)) {
-        const version = JSON.parse(fs.readFileSync(brewPkgPath, 'utf8')).version
-        if (version) return version
-      }
-      // Intel Homebrew
-      const intelBrewPkgPath = '/usr/local/lib/node_modules/openclaw/package.json'
-      if (fs.existsSync(intelBrewPkgPath)) {
-        const version = JSON.parse(fs.readFileSync(intelBrewPkgPath, 'utf8')).version
-        if (version) return version
-      }
-    } catch {}
-  }
-  
   return null
 }
 
@@ -414,30 +459,6 @@ function readBoundOpenclawCliPath() {
 function resolveOpenclawCliPath() {
   const bound = readBoundOpenclawCliPath()
   if (bound) return bound
-  
-  // 1. 首先检查配置文件中的路径
-  const panelConfig = readPanelConfig()
-  const customCliPath = panelConfig?.openclawCliPath || ''
-  if (customCliPath && fs.existsSync(customCliPath)) {
-    return customCliPath
-  }
-  
-  // 2. 直接检查常见路径，特别是 Homebrew 路径
-  const commonPaths = [
-    '/opt/homebrew/bin/openclaw',  // ARM Homebrew
-    '/usr/local/bin/openclaw',     // Intel Homebrew
-    path.join(homedir(), '.openclaw-bin', 'openclaw'),
-    path.join(homedir(), '.npm-global', 'bin', 'openclaw'),
-    path.join(homedir(), '.local', 'bin', 'openclaw'),
-  ]
-  
-  for (const path of commonPaths) {
-    if (fs.existsSync(path)) {
-      return path
-    }
-  }
-  
-  // 3. 最后尝试收集其他候选路径
   return collectPreferredCliCandidates()[0] || null
 }
 
@@ -1062,7 +1083,6 @@ function scanLocalSkillsFallback(agentSkillsDir = null) {
   const skills = []
   const seen = new Set()
   const scannedRoots = []
-  const cliError = null  // 本地扫描模式，不涉及 CLI
 
   for (const root of roots) {
     if (!fs.existsSync(root.dir) || !fs.statSync(root.dir).isDirectory()) continue
@@ -1160,59 +1180,60 @@ function detectInstalledSource() {
 }
 
 function getLocalOpenclawVersion() {
-  // 1. 首先尝试从配置的路径读取
-  const panelConfig = readPanelConfig()
-  const customCliPath = panelConfig?.openclawCliPath || ''
-  if (customCliPath && fs.existsSync(customCliPath)) {
-    const version = readVersionFromInstallation(customCliPath)
-    if (version) return version
-  }
-  
-  // 2. 尝试从常见路径读取
-  const commonPaths = [
-    '/opt/homebrew/bin/openclaw',
-    '/usr/local/bin/openclaw',
-    path.join(homedir(), '.openclaw-bin', 'openclaw'),
-    path.join(homedir(), '.npm-global', 'bin', 'openclaw'),
-    path.join(homedir(), '.local', 'bin', 'openclaw'),
-  ]
-  
-  for (const cliPath of commonPaths) {
-    if (fs.existsSync(cliPath)) {
-      const version = readVersionFromInstallation(cliPath)
-      if (version) return version
-    }
-  }
-  
-  // 3. 直接读取 Homebrew 安装的 package.json
+  let current = readVersionFromInstallation(resolveOpenclawCliPath())
   if (isMac) {
     // ARM Homebrew
     try {
-      const pkgPath = '/opt/homebrew/lib/node_modules/openclaw/package.json'
-      if (fs.existsSync(pkgPath)) {
-        const version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
-        if (version) return version
-      }
+      const target = fs.readlinkSync('/opt/homebrew/bin/openclaw')
+      const pkgPath = path.resolve('/opt/homebrew/bin', target, '..', 'package.json')
+      current = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
     } catch {}
     // Intel Homebrew
+    if (!current) {
+      try {
+        const target = fs.readlinkSync('/usr/local/bin/openclaw')
+        const pkgPath = path.resolve('/usr/local/bin', target, '..', 'package.json')
+        current = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
+      } catch {}
+    }
+    // standalone
+    if (!current) {
+      try {
+        const saDir = standaloneInstallDir()
+        const vf = path.join(saDir, 'VERSION')
+        if (fs.existsSync(vf)) {
+          const lines = fs.readFileSync(vf, 'utf8').split('\n')
+          for (const l of lines) { if (l.startsWith('openclaw_version=')) { current = l.split('=')[1]?.trim(); break } }
+        }
+        if (!current) {
+          const pkg = path.join(saDir, 'node_modules', '@qingchencloud', 'openclaw-zh', 'package.json')
+          if (fs.existsSync(pkg)) current = JSON.parse(fs.readFileSync(pkg, 'utf8')).version
+        }
+      } catch {}
+    }
+  }
+  if (!current && isWindows) {
     try {
-      const pkgPath = '/usr/local/lib/node_modules/openclaw/package.json'
-      if (fs.existsSync(pkgPath)) {
-        const version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
-        if (version) return version
+      const npmPrefix = readWindowsNpmGlobalPrefix()
+      if (npmPrefix) {
+        for (const pkg of [path.join('@qingchencloud', 'openclaw-zh'), 'openclaw']) {
+          const pkgPath = path.join(npmPrefix, 'node_modules', pkg, 'package.json')
+          if (fs.existsSync(pkgPath)) {
+            current = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
+            if (current) break
+          }
+        }
       }
     } catch {}
   }
-  
-  // 4. 作为最后的尝试，尝试执行命令
-  try {
-    const result = spawnOpenclawSync(['--version'], { timeout: 5000, windowsHide: true, encoding: 'utf8', cwd: homedir() })
-    const output = openclawResultOutput(result)
-    const version = output.trim().split(/\s+/).find(w => /^\d/.test(w)) || null
-    if (version) return version
-  } catch {}
-  
-  return null
+  if (!current) {
+    try {
+      const result = spawnOpenclawSync(['--version'], { timeout: 5000, windowsHide: true, encoding: 'utf8', cwd: homedir() })
+      const output = openclawResultOutput(result)
+      current = output.trim().split(/\s+/).find(w => /^\d/.test(w)) || null
+    } catch {}
+  }
+  return current || null
 }
 
 async function getLatestVersionFor(source = 'chinese') {
@@ -1317,13 +1338,7 @@ function readPanelConfig() {
       applyOpenclawPathConfig(_panelConfigCache)
       return JSON.parse(JSON.stringify(_panelConfigCache))
     }
-  } catch (error) {
-    const errorMsg = String(error.message || error)
-    if (errorMsg.includes('EPERM')) {
-      console.warn(`[api] 读取面板配置失败（权限错误）: ${PANEL_CONFIG_PATH}`)
-      console.warn('[api] 请检查目录权限或使用 sudo 运行')
-    }
-  }
+  } catch {}
   applyOpenclawPathConfig({})
   return {}
 }
@@ -2459,23 +2474,14 @@ function isCurrentGatewayOwner(owner, pid = null) {
 function writeGatewayOwner(pid = null) {
   const ownerPath = gatewayOwnerFilePath()
   const ownerDir = path.dirname(ownerPath)
-  try {
-    if (!fs.existsSync(ownerDir)) fs.mkdirSync(ownerDir, { recursive: true })
-    const current = currentGatewayOwnerSignature()
-    fs.writeFileSync(ownerPath, JSON.stringify({
-      ...current,
-      pid: Number.isInteger(pid) && pid > 0 ? pid : null,
-      startedAt: new Date().toISOString(),
-      startedBy: 'clawpanel',
-    }, null, 2))
-  } catch (e) {
-    const errMsg = String(e.message || e)
-    if (errMsg.includes('EPERM') || errMsg.includes('EACCES')) {
-      console.warn(`[api] 无法写入 gateway-owner.json（权限不足）: ${ownerPath}`)
-    } else {
-      throw e
-    }
-  }
+  if (!fs.existsSync(ownerDir)) fs.mkdirSync(ownerDir, { recursive: true })
+  const current = currentGatewayOwnerSignature()
+  fs.writeFileSync(ownerPath, JSON.stringify({
+    ...current,
+    pid: Number.isInteger(pid) && pid > 0 ? pid : null,
+    startedAt: new Date().toISOString(),
+    startedBy: 'clawpanel',
+  }, null, 2))
 }
 
 function clearGatewayOwner() {
@@ -3266,10 +3272,12 @@ const handlers = {
     const normalizedAccountId = typeof accountId === 'string' ? accountId.trim() : ''
     const setRootChannelEntry = (entry) => {
       const current = cfg.channels?.[storageKey]
-      if (current && typeof current === 'object' && current.accounts && typeof current.accounts === 'object') {
-        entry.accounts = current.accounts
+      // 合并模式：保留用户通过 CLI 或手动编辑的自定义字段（streaming, retry, dmPolicy 等）
+      if (current && typeof current === 'object') {
+        cfg.channels[storageKey] = { ...current, ...entry }
+      } else {
+        cfg.channels[storageKey] = entry
       }
-      cfg.channels[storageKey] = entry
     }
     const setAccountChannelEntry = (entry) => {
       const current = cfg.channels?.[storageKey] && typeof cfg.channels[storageKey] === 'object'
@@ -3304,7 +3312,6 @@ const handlers = {
       if (form.allowedUsers) entry.allowFrom = form.allowedUsers.split(',').map(s => s.trim()).filter(Boolean)
     } else if (platform === 'discord') {
       entry.token = form.token
-      entry.groupPolicy = 'allowlist'
       if (form.guildId) {
         const ck = form.channelId || '*'
         entry.guilds = { [form.guildId]: { users: ['*'], requireMention: true, channels: { [ck]: { allow: true, requireMention: true } } } }
@@ -3332,7 +3339,18 @@ const handlers = {
     }
 
     if (platform !== 'qqbot' && platform !== 'feishu' && platform !== 'dingtalk' && platform !== 'dingtalk-connector') {
-      cfg.channels[storageKey] = entry
+      // 合并模式：保留用户通过 CLI 或手动编辑的自定义字段
+      const existing = cfg.channels[storageKey]
+      cfg.channels[storageKey] = (existing && typeof existing === 'object')
+        ? { ...existing, ...entry }
+        : entry
+      // Discord: 仅在首次创建时设置默认值，不覆盖用户已有的设置
+      if (platform === 'discord') {
+        const d = cfg.channels[storageKey]
+        if (!d.groupPolicy) d.groupPolicy = 'allowlist'
+        if (!d.dm) d.dm = { enabled: false }
+        if (!d.retry) d.retry = { attempts: 3, minDelayMs: 500, maxDelayMs: 30000, jitter: 0.1 }
+      }
     }
 
     writeOpenclawConfigFile(cfg)
@@ -3508,7 +3526,7 @@ const handlers = {
       if (cfg.plugins.entries[pid]) cfg.plugins.entries[pid].enabled = false
     }
 
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8')
+    writeOpenclawConfigFile(cfg)
     return { ok: true, enabled, pluginId: pid }
   },
 
@@ -4763,42 +4781,12 @@ const handlers = {
   },
 
   check_node() {
-    const panelConfig = readPanelConfig()
-    const customNodePath = panelConfig?.customNodePath || ''
-    
-    if (customNodePath && fs.existsSync(customNodePath)) {
-      try {
-        const ver = execSync(`"${customNodePath}" --version 2>&1`, { timeout: 5000, windowsHide: true }).toString().trim()
-        return { installed: true, version: ver, path: customNodePath }
-      } catch {}
-    }
-    
     try {
       const ver = execSync('node --version 2>&1', { windowsHide: true }).toString().trim()
       return { installed: true, version: ver, path: findCommandPath('node') }
-    } catch {}
-    
-    const commonPaths = [
-      '/opt/homebrew/opt/node@24/bin/node',
-      '/opt/homebrew/bin/node',
-      '/usr/local/bin/node',
-      '/usr/local/n/versions/node/24.13.1/bin/node',
-      '/usr/local/n/versions/node/22.11.0/bin/node',
-      '/usr/local/Cellar/node/23.3.0/bin/node',
-      path.join(homedir(), '.nvm/versions/node/v24/bin/node'),
-      path.join(homedir(), '.volta/bin/node'),
-    ]
-    
-    for (const nodePath of commonPaths) {
-      if (fs.existsSync(nodePath)) {
-        try {
-          const ver = execSync(`"${nodePath}" --version 2>&1`, { timeout: 5000, windowsHide: true }).toString().trim()
-          return { installed: true, version: ver, path: nodePath }
-        } catch {}
-      }
+    } catch {
+      return { installed: false, version: null, path: null }
     }
-    
-    return { installed: false, version: null, path: null }
   },
 
   // 运行时状态摘要（轻量实现：直接读 openclaw.json + 端口检测，不 spawn CLI 进程）
@@ -5505,15 +5493,7 @@ const handlers = {
   // Gateway 安装/卸载
   install_gateway() {
     if (!resolveOpenclawCliPath()) throw new Error('openclaw CLI 未安装')
-    try {
-      return execOpenclawSync(['gateway', 'install'], { windowsHide: true, cwd: homedir() }, 'Gateway 服务安装失败') || 'Gateway 服务已安装'
-    } catch (error) {
-      const errorMsg = String(error.message || error)
-      if (errorMsg.includes('EPERM') && errorMsg.includes('LaunchAgents')) {
-        throw new Error('Gateway 服务安装失败：权限不足。请使用管理员权限运行：sudo npm run serve，或者手动运行：sudo openclaw gateway install')
-      }
-      throw error
-    }
+    return execOpenclawSync(['gateway', 'install'], { windowsHide: true, cwd: homedir() }, 'Gateway 服务安装失败') || 'Gateway 服务已安装'
   },
 
   async list_openclaw_versions({ source = 'chinese' } = {}) {
@@ -6095,12 +6075,6 @@ const handlers = {
     return readPanelConfig()
   },
 
-  get_panel_config({ key }) {
-    const config = readPanelConfig()
-    if (key) return config[key]
-    return config
-  },
-
   write_panel_config({ config }) {
     const nextConfig = config && typeof config === 'object' ? { ...config } : {}
     if (typeof nextConfig.openclawDir === 'string') {
@@ -6119,23 +6093,9 @@ const handlers = {
         delete nextConfig[key]
       }
     }
-    // Claw助手功能开关
-    if (typeof nextConfig.qingchenFeatureAvailable === 'boolean') {
-      // 允许显式设置 true/false
-    } else {
-      delete nextConfig.qingchenFeatureAvailable
-    }
     const panelDir = path.dirname(PANEL_CONFIG_PATH)
     if (!fs.existsSync(panelDir)) fs.mkdirSync(panelDir, { recursive: true })
-    try {
-      fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify(nextConfig, null, 2))
-    } catch (error) {
-      const errorMsg = String(error.message || error)
-      if (errorMsg.includes('EPERM')) {
-        throw new Error(`配置保存失败（权限错误）: ${PANEL_CONFIG_PATH}\n请检查目录权限，或使用 sudo npm run serve 启动服务`)
-      }
-      throw error
-    }
+    fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify(nextConfig, null, 2))
     invalidateConfigCache()
     applyOpenclawPathConfig(nextConfig)
     return true
@@ -6329,37 +6289,28 @@ const handlers = {
     return true
   },
 
-  check_panel_update() { return { latest: null, url: 'https://github.com/ethanwwan/clawpanel/releases' } },
-
-  // 前端热更新
-  async check_frontend_update() {
-    const pkgPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-    const currentVersion = pkg.version
-
-    try {
-      const resp = await globalThis.fetch('https://claw.qt.cool/update/latest.json', {
-        signal: AbortSignal.timeout(8000),
-        headers: { 'User-Agent': 'ClawPanel-Web' },
-      })
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-      const manifest = await resp.json()
-      const latestVersion = manifest.version || ''
-      const minAppVersion = manifest.minAppVersion || '0.0.0'
-      const compatible = versionGe(currentVersion, minAppVersion)
-      const hasUpdate = !!latestVersion && latestVersion !== currentVersion && compatible && versionGt(latestVersion, currentVersion)
-      return { currentVersion, latestVersion, hasUpdate, compatible, updateReady: false, manifest }
-    } catch {
-      return { currentVersion, latestVersion: currentVersion, hasUpdate: false, compatible: true, updateReady: false, manifest: { version: currentVersion } }
+  async check_panel_update() {
+    const sources = [
+      { api: 'https://api.github.com/repos/qingchencloud/clawpanel/releases/latest', releases: 'https://github.com/qingchencloud/clawpanel/releases', name: 'github' },
+      { api: 'https://gitee.com/api/v5/repos/QtCodeCreators/clawpanel/releases/latest', releases: 'https://gitee.com/QtCodeCreators/clawpanel/releases', name: 'gitee' },
+    ]
+    let lastErr = ''
+    for (const src of sources) {
+      try {
+        const resp = await globalThis.fetch(src.api, {
+          signal: AbortSignal.timeout(8000),
+          headers: { 'User-Agent': 'ClawPanel' },
+        })
+        if (!resp.ok) { lastErr = `${src.name}: HTTP ${resp.status}`; continue }
+        const json = await resp.json()
+        const tag = (json.tag_name || '').replace(/^v/, '').trim()
+        if (!tag) { lastErr = `${src.name}: 未找到版本号`; continue }
+        return { latest: tag, url: json.html_url || src.releases, source: src.name, downloadUrl: 'https://claw.qt.cool' }
+      } catch (e) { lastErr = `${src.name}: ${e.message}`; continue }
     }
+    return { latest: null, url: 'https://github.com/qingchencloud/clawpanel/releases', error: lastErr }
   },
-  download_frontend_update() { return { success: true, files: 12, path: path.join(OPENCLAW_DIR, 'clawpanel', 'web-update') } },
-  rollback_frontend_update() { return { success: true } },
-  get_update_status() {
-    const pkgPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-    return { currentVersion: pkg.version, updateReady: false, updateVersion: '', updateDir: path.join(OPENCLAW_DIR, 'clawpanel', 'web-update') }
-  },
+
   write_env_file({ path: p, config }) {
     const expanded = p.startsWith('~/') ? path.join(homedir(), p.slice(2)) : p
     if (!expanded.startsWith(OPENCLAW_DIR)) throw new Error(`只允许写入 ${OPENCLAW_DIR} 下的文件`)
@@ -6368,60 +6319,499 @@ const handlers = {
     fs.writeFileSync(expanded, config)
     return true
   },
-}
 
-function tryFixPanelConfigPermission() {
-  try {
-    if (!fs.existsSync(PANEL_STATE_DIR)) {
-      fs.mkdirSync(PANEL_STATE_DIR, { recursive: true })
-    }
-    if (!fs.existsSync(PANEL_CONFIG_PATH)) {
-      fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify({}))
-      return { success: true, message: '配置文件已创建' }
-    }
-    try {
-      const fd = fs.openSync(PANEL_CONFIG_PATH, 'r+')
-      fs.closeSync(fd)
-      return { success: true, message: '权限正常' }
-    } catch (openError) {
-      if (openError.message?.includes('EPERM')) {
-        try {
-          fs.readFileSync(PANEL_CONFIG_PATH, 'utf8')
-          return { success: true, message: '只读权限，可读取配置' }
-        } catch (readError) {
-          return { success: false, message: `无法读取配置文件: ${PANEL_CONFIG_PATH}` }
+  // =========================================================================
+  // Hermes Agent 命令
+  // =========================================================================
+
+  check_python() {
+    const enhanced = hermesEnhancedPath()
+    const result = { platform: isWindows ? 'win-x64' : isMac ? 'mac-arm64' : 'linux-x64' }
+    const candidates = isWindows
+      ? [['py', ['-3', '--version']], ['python', ['--version']], ['python3', ['--version']]]
+      : [['python3', ['--version']], ['python', ['--version']]]
+    let found = false
+    for (const [cmd, args] of candidates) {
+      const r = runHermesSilent(cmd, args)
+      if (r.ok) {
+        const m = r.stdout.match(/(\d+)\.(\d+)\.(\d+)/)
+        if (m) {
+          const [, maj, min, pat] = m.map(Number)
+          result.installed = true
+          result.version = `${maj}.${min}.${pat}`
+          result.versionOk = maj >= 3 && min >= 11
+          result.pythonCmd = cmd
+          result.path = findCommandPath(cmd)
+          found = true
+          break
         }
       }
-      return { success: false, message: openError.message }
     }
-  } catch (error) {
-    return { success: false, message: error.message }
+    if (!found) {
+      result.installed = false; result.version = null; result.versionOk = false; result.path = null; result.pythonCmd = null
+    }
+    result.hasPip = runHermesSilent('pip', ['--version']).ok || runHermesSilent('pip3', ['--version']).ok
+    result.hasPipx = runHermesSilent('pipx', ['--version']).ok
+    const uvPath = path.join(uvBinDir(), isWindows ? 'uv.exe' : 'uv')
+    result.hasUv = fs.existsSync(uvPath) || runHermesSilent('uv', ['--version']).ok
+    result.hasGit = runHermesSilent('git', ['--version']).ok
+    result.hasBrew = !isWindows && runHermesSilent('brew', ['--version']).ok
+    return result
+  },
+
+  async check_hermes() {
+    const home = hermesHome()
+    const result = {}
+    // 1. 检测 hermes CLI
+    let r = runHermesSilent('hermes', ['version'])
+    if (!r.ok) r = runHermesSilent('hermes', ['--version'])
+    if (r.ok) {
+      const verMatch = r.stdout.split(/\s+/).find(s => /^v?\d/.test(s)) || r.stdout
+      result.installed = true
+      result.version = verMatch.replace(/^v/, '')
+      result.path = findCommandPath('hermes')
+    } else {
+      result.installed = false; result.version = null; result.path = null
+    }
+    // 2. managed
+    const managed = process.env.HERMES_MANAGED
+    if (managed) {
+      const l = managed.trim().toLowerCase()
+      result.managed = ['true','1','yes','nix','nixos'].includes(l) ? 'NixOS' : ['brew','homebrew'].includes(l) ? 'Homebrew' : 'unknown'
+    } else {
+      result.managed = fs.existsSync(path.join(home, '.managed')) ? 'NixOS' : null
+    }
+    // 3. 配置文件
+    const configPath = path.join(home, 'config.yaml')
+    const envPath = path.join(home, '.env')
+    result.configExists = fs.existsSync(configPath)
+    result.envExists = fs.existsSync(envPath)
+    result.hermesHome = home
+    // 4. 读取 model
+    try {
+      const content = fs.readFileSync(configPath, 'utf8')
+      let inModel = false
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim()
+        if (trimmed.startsWith('model:')) {
+          const val = trimmed.slice(6).trim().replace(/^["']|["']$/g, '')
+          if (val) { result.model = val; break }
+          inModel = true; continue
+        }
+        if (inModel) {
+          if (!/^\s/.test(line) && trimmed) break
+          if (trimmed.startsWith('default:')) {
+            result.model = trimmed.slice(8).trim().replace(/^["']|["']$/g, '')
+          }
+        }
+      }
+    } catch {}
+    // 5. Gateway 运行检测
+    const port = hermesGatewayPort()
+    const gwUrl = hermesGatewayUrl()
+    let gatewayRunning = false
+    try {
+      const sock = new net.Socket()
+      gatewayRunning = await new Promise(resolve => {
+        sock.setTimeout(800)
+        sock.connect(port, '127.0.0.1', () => { sock.destroy(); resolve(true) })
+        sock.on('error', () => { sock.destroy(); resolve(false) })
+        sock.on('timeout', () => { sock.destroy(); resolve(false) })
+      })
+    } catch { gatewayRunning = false }
+    result.gatewayRunning = gatewayRunning
+    result.gatewayPort = port
+    result.gatewayUrl = gwUrl
+    return result
+  },
+
+  async install_hermes({ method = 'uv-tool', extras = [] } = {}) {
+    // 1. 查找 uv
+    const uvPath = path.join(uvBinDir(), isWindows ? 'uv.exe' : 'uv')
+    let uv = fs.existsSync(uvPath) ? uvPath : null
+    if (!uv && runHermesSilent('uv', ['--version']).ok) uv = 'uv'
+    if (!uv) throw new Error('uv 未安装。请先安装 uv (https://docs.astral.sh/uv/) 或使用 Tauri 桌面版自动下载')
+    // 2. 安装
+    const pkg = extras.length
+      ? `hermes-agent[${extras.join(',')}] @ git+https://github.com/NousResearch/hermes-agent.git`
+      : 'hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git'
+    const installArgs = method === 'uv-pip'
+      ? ['pip', 'install', pkg]
+      : ['tool', 'install', '--force', pkg, '--python', '3.11']
+    const result = spawnSync(uv, installArgs, {
+      env: { ...process.env, PATH: hermesEnhancedPath(), GIT_TERMINAL_PROMPT: '0' },
+      timeout: 600000,
+      windowsHide: true,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    if (result.status !== 0) throw new Error(`安装失败: ${(result.stderr || '').trim()}`)
+    // 3. 验证
+    const ver = runHermesSilent('hermes', ['version'])
+    if (ver.ok) return ver.stdout
+    throw new Error('安装完成但验证失败: hermes version 不可用')
+  },
+
+  async configure_hermes({ provider, apiKey, model, baseUrl } = {}) {
+    const home = hermesHome()
+    fs.mkdirSync(home, { recursive: true })
+    for (const d of ['cron','sessions','logs','memories','skills','pairing','hooks','image_cache','audio_cache']) {
+      fs.mkdirSync(path.join(home, d), { recursive: true })
+    }
+    const envProvider = provider === 'anthropic' || provider === 'minimax' ? 'anthropic' : provider === 'openrouter' ? 'openrouter' : 'openai'
+    const modelStr = model || (envProvider === 'anthropic' ? 'claude-sonnet-4-20250514' : envProvider === 'openrouter' ? 'anthropic/claude-sonnet-4-20250514' : 'gpt-4o')
+    const baseUrlLine = baseUrl && baseUrl.trim() ? `  base_url: ${baseUrl.trim()}\n` : ''
+    // config.yaml
+    const configPath = path.join(home, 'config.yaml')
+    let configContent
+    if (fs.existsSync(configPath)) {
+      const existing = fs.readFileSync(configPath, 'utf8')
+      configContent = _mergeHermesConfigYaml(existing, modelStr, baseUrlLine)
+    } else {
+      configContent = `# Hermes Agent configuration (managed by ClawPanel)\nmodel:\n  default: ${modelStr}\n${baseUrlLine}platform_toolsets:\n  api_server:\n    - hermes-api-server\nterminal:\n  backend: local\nplatforms:\n  api_server:\n    enabled: true\n`
+    }
+    fs.writeFileSync(configPath, configContent)
+    // .env
+    const envKey = envProvider === 'anthropic' ? 'ANTHROPIC_API_KEY' : envProvider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'OPENAI_API_KEY'
+    const managedKeys = ['OPENAI_API_KEY','ANTHROPIC_API_KEY','OPENROUTER_API_KEY','OPENAI_BASE_URL','ANTHROPIC_BASE_URL','GATEWAY_ALLOW_ALL_USERS','API_SERVER_KEY']
+    const newPairs = [[envKey, apiKey], ['GATEWAY_ALLOW_ALL_USERS', 'true'], ['API_SERVER_KEY', 'clawpanel-local']]
+    if (baseUrl && baseUrl.trim()) {
+      newPairs.push([envProvider === 'anthropic' ? 'ANTHROPIC_BASE_URL' : 'OPENAI_BASE_URL', baseUrl.trim()])
+    }
+    const envPath = path.join(home, '.env')
+    let envContent
+    if (fs.existsSync(envPath)) {
+      const existing = fs.readFileSync(envPath, 'utf8')
+      envContent = _mergeEnvFile(existing, managedKeys, newPairs)
+    } else {
+      envContent = newPairs.map(([k, v]) => `${k}=${v}`).join('\n') + '\n'
+    }
+    fs.writeFileSync(envPath, envContent)
+    return '配置已保存'
+  },
+
+  async hermes_gateway_action({ action } = {}) {
+    const enhanced = hermesEnhancedPath()
+    const port = hermesGatewayPort()
+    if (action === 'start') {
+      // 检测是否已运行
+      const alive = await _tcpProbe('127.0.0.1', port, 300)
+      if (alive) return 'Gateway 已在运行'
+      // 启动
+      const home = hermesHome()
+      const envVars = { ...process.env, PATH: enhanced }
+      const envPath = path.join(home, '.env')
+      if (fs.existsSync(envPath)) {
+        for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+          const t = line.trim()
+          if (!t || t.startsWith('#')) continue
+          const eq = t.indexOf('=')
+          if (eq > 0) envVars[t.slice(0, eq).trim()] = t.slice(eq + 1).trim()
+        }
+      }
+      const logPath = path.join(home, 'gateway-run.log')
+      const logFd = fs.openSync(logPath, 'a')
+      const child = spawn('hermes', ['gateway', 'run'], {
+        cwd: home, env: envVars, stdio: ['ignore', logFd, logFd],
+        detached: true, windowsHide: true,
+      })
+      child.unref()
+      _hermesGwProcess = child
+      // 等端口可达
+      for (let i = 0; i < 40; i++) {
+        await new Promise(r => setTimeout(r, 500))
+        if (await _tcpProbe('127.0.0.1', port, 500)) {
+          fs.closeSync(logFd)
+          return 'Gateway 已启动'
+        }
+      }
+      fs.closeSync(logFd)
+      throw new Error('Gateway 启动后端口未就绪')
+    }
+    if (action === 'stop') {
+      if (_hermesGwProcess) { try { _hermesGwProcess.kill() } catch {} _hermesGwProcess = null }
+      const r = runHermesSilent('hermes', ['gateway', 'stop'])
+      if (isWindows) {
+        try { spawnSync('taskkill', ['/F', '/IM', 'hermes.exe'], { windowsHide: true, timeout: 5000 }) } catch {}
+      }
+      return 'Gateway 已停止'
+    }
+    if (action === 'status') {
+      const r = runHermesSilent('hermes', ['gateway', 'status'])
+      return r.ok ? r.stdout : 'unknown'
+    }
+    throw new Error(`不支持的操作: ${action}`)
+  },
+
+  async hermes_health_check() {
+    const url = `${hermesGatewayUrl()}/health`
+    const resp = await globalThis.fetch(url, { signal: AbortSignal.timeout(5000), headers: { 'User-Agent': 'ClawPanel-Web' } })
+    if (!resp.ok) throw new Error(`Gateway 返回 HTTP ${resp.status}`)
+    return await resp.json()
+  },
+
+  async hermes_api_proxy({ method, path: reqPath, body, headers: customHeaders } = {}) {
+    const url = `${hermesGatewayUrl()}${reqPath}`
+    const opts = { method: method || 'GET', headers: { 'User-Agent': 'ClawPanel-Web' } }
+    const timeout = (reqPath.includes('/chat/completions') || reqPath.includes('/responses')) ? 120000 : 30000
+    opts.signal = AbortSignal.timeout(timeout)
+    if (body && (method === 'POST' || method === 'PATCH')) {
+      opts.body = typeof body === 'string' ? body : JSON.stringify(body)
+      opts.headers['Content-Type'] = 'application/json'
+    }
+    if (customHeaders && typeof customHeaders === 'object') {
+      for (const [k, v] of Object.entries(customHeaders)) { if (typeof v === 'string') opts.headers[k] = v }
+    }
+    const resp = await globalThis.fetch(url, opts)
+    const text = await resp.text()
+    let json; try { json = JSON.parse(text) } catch { json = { raw: text } }
+    if (resp.status >= 400) throw new Error(json?.error || text)
+    return json
+  },
+
+  async hermes_agent_run({ input, sessionId, conversationHistory, instructions } = {}) {
+    // Web 模式下简化实现：POST /v1/runs 然后轮询或直接返回
+    const gwUrl = hermesGatewayUrl()
+    const home = hermesHome()
+    let apiKey = ''
+    try {
+      const envContent = fs.readFileSync(path.join(home, '.env'), 'utf8')
+      const m = envContent.match(/^API_SERVER_KEY=(.+)$/m)
+      if (m) apiKey = m[1].trim()
+    } catch {}
+    const payload = { input }
+    if (sessionId) payload.session_id = sessionId
+    if (conversationHistory) payload.conversation_history = conversationHistory
+    if (instructions) payload.instructions = instructions
+    const headers = { 'Content-Type': 'application/json', 'User-Agent': 'ClawPanel-Web' }
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+    const resp = await globalThis.fetch(`${gwUrl}/v1/runs`, {
+      method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(10000),
+    })
+    if (!resp.ok) { const t = await resp.text(); throw new Error(`HTTP ${resp.status}: ${t}`) }
+    const body = await resp.json()
+    return body.run_id || JSON.stringify(body)
+  },
+
+  hermes_read_config() {
+    const home = hermesHome()
+    const configPath = path.join(home, 'config.yaml')
+    const envPath = path.join(home, '.env')
+    let modelName = '', baseUrl = '', provider = '', apiKey = ''
+    try {
+      const content = fs.readFileSync(configPath, 'utf8')
+      let inModel = false
+      for (const line of content.split('\n')) {
+        const t = line.trim()
+        if (t.startsWith('model:')) {
+          inModel = true
+          const v = t.slice(6).trim().replace(/^["']|["']$/g, '')
+          if (v && !v.includes(':')) modelName = v
+          continue
+        }
+        if (inModel) {
+          if (t.startsWith('default:')) modelName = t.slice(8).trim().replace(/^["']|["']$/g, '')
+          else if (t.startsWith('base_url:')) baseUrl = t.slice(9).trim().replace(/^["']|["']$/g, '')
+          else if (t.startsWith('provider:')) provider = t.slice(9).trim().replace(/^["']|["']$/g, '')
+          else if (t && !t.startsWith('#') && !t.startsWith('-') && !/^\s/.test(line)) inModel = false
+        }
+      }
+    } catch {}
+    try {
+      const envContent = fs.readFileSync(envPath, 'utf8')
+      for (const line of envContent.split('\n')) {
+        const t = line.trim()
+        if (t.startsWith('OPENAI_API_KEY=')) apiKey = t.slice(15)
+        else if (t.startsWith('ANTHROPIC_API_KEY=') && !apiKey) apiKey = t.slice(18)
+        else if (t.startsWith('OPENROUTER_API_KEY=') && !apiKey) apiKey = t.slice(19)
+        if (t.startsWith('OPENAI_BASE_URL=') && !baseUrl) baseUrl = t.slice(16)
+        else if (t.startsWith('ANTHROPIC_BASE_URL=') && !baseUrl) baseUrl = t.slice(19)
+      }
+    } catch {}
+    const displayModel = modelName.includes('/') ? modelName.slice(modelName.indexOf('/') + 1) : modelName
+    return { model: displayModel, model_raw: modelName, base_url: baseUrl, provider, api_key: apiKey, config_exists: fs.existsSync(configPath) }
+  },
+
+  async hermes_fetch_models({ baseUrl, apiKey, apiType } = {}) {
+    const api = apiType || 'openai'
+    let base = baseUrl.replace(/\/+$/, '')
+    for (const suffix of ['/chat/completions', '/completions', '/responses', '/messages', '/models']) {
+      if (base.endsWith(suffix)) base = base.slice(0, -suffix.length)
+    }
+    const headers = { 'User-Agent': 'ClawPanel-Web' }
+    let url
+    if (api.includes('anthropic')) {
+      if (!base.endsWith('/v1')) base += '/v1'
+      url = `${base}/models`
+      headers['anthropic-version'] = '2023-06-01'
+      headers['x-api-key'] = apiKey
+    } else if (api.includes('google')) {
+      url = `${base}/models?key=${apiKey}`
+    } else {
+      url = `${base}/models`
+      headers['Authorization'] = `Bearer ${apiKey}`
+    }
+    const resp = await globalThis.fetch(url, { headers, signal: AbortSignal.timeout(15000) })
+    if (!resp.ok) { const t = await resp.text(); throw new Error(`HTTP ${resp.status}: ${t.slice(0, 200)}`) }
+    const data = await resp.json()
+    let models
+    if (api.includes('google')) {
+      models = (data.models || []).map(m => (m.name || '').replace('models/', '')).filter(Boolean)
+    } else {
+      models = (data.data || []).map(m => m.id).filter(Boolean)
+    }
+    return models.sort()
+  },
+
+  hermes_update_model({ model } = {}) {
+    const configPath = path.join(hermesHome(), 'config.yaml')
+    const content = fs.readFileSync(configPath, 'utf8')
+    let found = false
+    const newContent = content.split('\n').map(line => {
+      const t = line.trim()
+      if (t.startsWith('default:') && !found) {
+        found = true
+        const indent = line.length - line.trimStart().length
+        return ' '.repeat(indent) + `default: ${model}`
+      }
+      return line
+    }).join('\n')
+    if (!found) throw new Error('config.yaml 中未找到 model.default 字段')
+    fs.writeFileSync(configPath, newContent)
+    return `模型已切换为 ${model}`
+  },
+
+  async hermes_detect_environments() {
+    const result = { wsl2: { available: false }, docker: { available: false } }
+    // Docker
+    const dockerR = runHermesSilent('docker', ['info', '--format', '{{.ServerVersion}}'])
+    if (dockerR.ok) {
+      result.docker.available = true
+      result.docker.version = dockerR.stdout
+    }
+    return result
+  },
+
+  hermes_set_gateway_url({ url } = {}) {
+    const cfg = readPanelConfig()
+    if (!cfg.hermes || typeof cfg.hermes !== 'object') cfg.hermes = {}
+    if (url && url.trim()) {
+      cfg.hermes.gatewayUrl = url.trim()
+    } else {
+      delete cfg.hermes.gatewayUrl
+    }
+    if (!fs.existsSync(path.dirname(PANEL_CONFIG_PATH))) fs.mkdirSync(path.dirname(PANEL_CONFIG_PATH), { recursive: true })
+    fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify(cfg, null, 2))
+    return `Gateway URL 已设置: ${hermesGatewayUrl()}`
+  },
+
+  async update_hermes() {
+    const uvPath = path.join(uvBinDir(), isWindows ? 'uv.exe' : 'uv')
+    const uv = fs.existsSync(uvPath) ? uvPath : 'uv'
+    const pkg = 'hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git'
+    const result = spawnSync(uv, ['tool', 'install', '--reinstall', pkg, '--python', '3.11'], {
+      env: { ...process.env, PATH: hermesEnhancedPath(), GIT_TERMINAL_PROMPT: '0' },
+      timeout: 600000, windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    if (result.status !== 0) throw new Error(`升级失败: ${(result.stderr || '').trim()}`)
+    return '升级完成'
+  },
+
+  async uninstall_hermes({ cleanConfig = false } = {}) {
+    const uvPath = path.join(uvBinDir(), isWindows ? 'uv.exe' : 'uv')
+    const uv = fs.existsSync(uvPath) ? uvPath : 'uv'
+    const result = spawnSync(uv, ['tool', 'uninstall', 'hermes-agent'], {
+      env: { ...process.env, PATH: hermesEnhancedPath() },
+      timeout: 60000, windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    if (result.status !== 0) throw new Error(`卸载失败: ${(result.stderr || '').trim()}`)
+    // 清理 venv
+    const venvDir = path.join(homedir(), '.hermes-venv')
+    if (fs.existsSync(venvDir)) fs.rmSync(venvDir, { recursive: true, force: true })
+    if (cleanConfig) {
+      const home = hermesHome()
+      if (fs.existsSync(home)) fs.rmSync(home, { recursive: true, force: true })
+    }
+    return 'Hermes Agent 已卸载'
+  },
+}
+
+// Hermes 配置合并辅助函数
+function _mergeHermesConfigYaml(existing, modelStr, baseUrlLine) {
+  const lines = existing.split('\n')
+  const result = []
+  let inModel = false, written = false, i = 0
+  while (i < lines.length) {
+    const line = lines[i], t = line.trim()
+    if (t === 'model:' || t.startsWith('model:')) {
+      inModel = true; written = true
+      result.push('model:')
+      result.push(`  default: ${modelStr}`)
+      if (baseUrlLine) result.push(baseUrlLine.trimEnd())
+      i++
+      while (i < lines.length) {
+        const next = lines[i], nt = next.trim()
+        if (!nt) { i++; continue }
+        if (next.startsWith('  ') || next.startsWith('\t')) { i++; continue }
+        break
+      }
+      continue
+    }
+    if (inModel && t && !line.startsWith('  ') && !line.startsWith('\t')) inModel = false
+    if (!inModel) result.push(line)
+    i++
   }
+  if (!written) {
+    result.push('model:')
+    result.push(`  default: ${modelStr}`)
+    if (baseUrlLine) result.push(baseUrlLine.trimEnd())
+  }
+  let final = result.join('\n')
+  if (!final.includes('platform_toolsets:')) final += '\nplatform_toolsets:\n  api_server:\n    - hermes-api-server\n'
+  if (!final.includes('terminal:')) final += 'terminal:\n  backend: local\n'
+  if (!final.includes('platforms:')) final += 'platforms:\n  api_server:\n    enabled: true\n'
+  if (!final.endsWith('\n')) final += '\n'
+  return final
+}
+
+function _mergeEnvFile(existing, managedKeys, newPairs) {
+  const result = []
+  for (const line of existing.split('\n')) {
+    const t = line.trim()
+    if (!t || t.startsWith('#')) { result.push(line); continue }
+    const eq = t.indexOf('=')
+    if (eq > 0 && managedKeys.includes(t.slice(0, eq).trim())) continue
+    result.push(line)
+  }
+  for (const [k, v] of newPairs) result.push(`${k}=${v}`)
+  let content = result.join('\n')
+  if (!content.endsWith('\n')) content += '\n'
+  return content
+}
+
+function _tcpProbe(host, port, timeoutMs) {
+  return new Promise(resolve => {
+    const sock = new net.Socket()
+    sock.setTimeout(timeoutMs)
+    sock.connect(port, host, () => { sock.destroy(); resolve(true) })
+    sock.on('error', () => { sock.destroy(); resolve(false) })
+    sock.on('timeout', () => { sock.destroy(); resolve(false) })
+  })
 }
 
 // === Vite 插件 ===
 
 // 初始化：密码检测 + 启动日志 + 定时清理
 function _initApi() {
-  const permResult = tryFixPanelConfigPermission()
-  if (!permResult.success) {
-    console.warn(`[api] ⚠️  配置文件权限问题: ${permResult.message}`)
-    console.warn('[api] ⚠️  请手动修复权限: sudo chown -R $USER:$USER ~/.openclaw/')
-  }
-  
   const cfg = readPanelConfig()
   if (!cfg.accessPassword && !cfg.ignoreRisk) {
-    try {
-      cfg.accessPassword = '123456'
-      cfg.mustChangePassword = true
-      if (!fs.existsSync(OPENCLAW_DIR)) fs.mkdirSync(OPENCLAW_DIR, { recursive: true })
-      fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify(cfg, null, 2))
-      invalidateConfigCache()
-      console.log('[api] ⚠️  首次启动，默认访问密码: 123456')
-      console.log('[api] ⚠️  首次登录后将强制要求修改密码')
-    } catch (error) {
-      console.warn('[api] ⚠️  无法设置默认密码:', error.message)
-    }
+    cfg.accessPassword = '123456'
+    cfg.mustChangePassword = true
+    if (!fs.existsSync(OPENCLAW_DIR)) fs.mkdirSync(OPENCLAW_DIR, { recursive: true })
+    fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify(cfg, null, 2))
+    invalidateConfigCache()
+    console.log('[api] ⚠️  首次启动，默认访问密码: 123456')
+    console.log('[api] ⚠️  首次登录后将强制要求修改密码')
   }
   const pw = getAccessPassword()
   console.log('[api] API 已启动，配置目录:', OPENCLAW_DIR)

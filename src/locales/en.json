@@ -90,6 +90,11 @@
     "remoteHint": "The remote server must be running ClawPanel (serve.js).",
     "example": "Example"
   },
+  "engine": {
+    "switchedTo": "Switched to {name} mode",
+    "hermesSetupDesc": "Install and configure Hermes Agent",
+    "hermesSetupIntro": "Hermes Agent is an AI assistant with tool-calling capabilities.<br>This engine is coming soon. Stay tuned!"
+  },
   "dashboard": {
     "title": "Dashboard",
     "desc": "OpenClaw runtime status overview",
