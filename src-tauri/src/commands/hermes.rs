@@ -67,7 +67,7 @@ fn kill_gateway_pid() -> bool {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        use std::os::unix::process::ExitStatusExt;
+        // use std::os::unix::process::ExitStatusExt;
         let ok = std::process::Command::new("kill")
             .args(["-9", &pid.to_string()])
             .output()
@@ -902,7 +902,7 @@ fn extract_uv_zip(data: &[u8], dest: &std::path::Path) -> Result<(), String> {
 /// Unix: 解压 tar.gz 格式的 uv 二进制
 #[cfg(not(target_os = "windows"))]
 fn extract_uv_tar_gz(data: &[u8], dest: &std::path::Path) -> Result<(), String> {
-    use std::io::Read;
+    // use std::io::Read;
     let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(data));
     let mut archive = tar::Archive::new(gz);
     for entry in archive.entries().map_err(|e| format!("tar 解析失败: {e}"))? {
