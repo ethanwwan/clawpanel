@@ -431,7 +431,7 @@ function bindEvents(page) {
   page.querySelector('#btn-toggle-sidebar-main')?.addEventListener('click', toggleSidebar)
   page.querySelector('#btn-new-session').addEventListener('click', () => showNewSessionDialog())
   page.querySelector('#btn-cmd').addEventListener('click', () => toggleCmdPanel())
-  page.querySelector('#btn-reset-session').addEventListener('click', () => resetCurrentSession())
+  page.querySelector('#btn-reset-session').addEventListener('click', () => loadHistory())
   page.querySelector('#btn-refresh-models')?.addEventListener('click', () => loadModelOptions(true))
   _workspaceBtn?.addEventListener('click', async (e) => {
     e.stopPropagation()
