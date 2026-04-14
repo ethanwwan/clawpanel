@@ -1227,6 +1227,11 @@ async function connectGateway() {
       }
       if (overlay) overlay.style.display = 'none'
       showTyping(false)  // Gateway 就绪后关闭加载动画
+      // 重连时重置发送状态，避免残留消息被重复发送
+      _isSending = false
+      _isStreaming = false
+      // 清空消息队列（Gateway 重启后之前的发送请求已无效）
+      _messageQueue = []
       // 重连后恢复：保留当前 sessionKey，不重复加载历史
       if (!_sessionKey) {
         const saved = localStorage.getItem(STORAGE_SESSION_KEY)
