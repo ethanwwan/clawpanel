@@ -124,6 +124,14 @@ export async function render() {
   _pageActive = true
   _page = page
 
+  // 页面可见性变化时刷新聊天（从其他标签页切回时加载新消息）
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && _sessionKey) {
+      _lastHistoryHash = ''
+      loadHistory()
+    }
+  })
+
   page.innerHTML = `
     <div class="chat-sidebar" id="chat-sidebar">
       <div class="chat-sidebar-header">
@@ -2399,6 +2407,7 @@ async function loadHistory() {
         const role = (m.role === 'tool' || m.role === 'toolResult') ? 'assistant' : m.role
         return { id: m.id || uuid(), sessionKey: _sessionKey, role, content: c?.text || '', timestamp: m.timestamp || Date.now() }
       }))
+      if (_messageQueue.length > 0) scrollToBottom()
       _isLoadingHistory = false
       return
     }
