@@ -1957,11 +1957,16 @@ function handleChatEvent(payload) {
       meta.innerHTML = parts.join('')
       wrapper.appendChild(meta)
     }
-    if (_currentAiText || _currentAiImages.length) {
+    if (_currentAiText || _currentAiImages.length || _currentAiVideos.length || _currentAiAudios.length || _currentAiFiles.length) {
       saveMessage({
         id: payload.runId || uuid(), sessionKey: _sessionKey, role: 'assistant',
         content: _currentAiText, timestamp: Date.now(),
-        attachments: _currentAiImages.map(i => ({ category: 'image', mimeType: i.mediaType || 'image/png', url: i.url, content: i.data })).filter(a => a.url || a.content)
+        attachments: [
+          ..._currentAiImages.map(i => ({ category: 'image', mimeType: i.mediaType || 'image/png', url: i.url, content: i.data })).filter(a => a.url || a.content),
+          ..._currentAiVideos.map(v => ({ category: 'video', mimeType: v.mediaType || 'video/mp4', url: v.url, content: v.data })).filter(a => a.url || a.content),
+          ..._currentAiAudios.map(a => ({ category: 'audio', mimeType: a.mediaType || 'audio/mpeg', url: a.url, content: a.data })).filter(a => a.url || a.content),
+          ..._currentAiFiles.map(f => ({ category: 'file', mimeType: f.mediaType || 'application/octet-stream', url: f.url, content: f.data, name: f.name })).filter(a => a.url || a.content),
+        ].filter(a => a.url || a.content)
       })
     }
     // 托管 Agent：捕获 AI 回复，检测停止信号，决定是否继续
@@ -2396,7 +2401,10 @@ async function loadHistory() {
       return
     }
     const deduped = dedupeHistory(result.messages)
-    const hash = deduped.map(m => `${m.role}:${(m.text || '').length}`).join('|')
+    const hash = deduped.map(m => {
+      const contentHash = m.id || (m.text || '') + '|' + (m.images?.length || 0) + '|' + (m.videos?.length || 0) + '|' + (m.audios?.length || 0) + '|' + (m.files?.length || 0) + '|' + (m.tools?.length || 0)
+      return `${m.role}:${contentHash}`
+    }).join('|')
     if (hash === _lastHistoryHash && hasExisting) return
     _lastHistoryHash = hash
 
@@ -2473,7 +2481,7 @@ function dedupeHistory(messages) {
         continue
       }
     }
-    deduped.push({ role, text: c.text, images: c.images, videos: c.videos, audios: c.audios, files: c.files, tools, timestamp: msg.timestamp })
+    deduped.push({ id: msg.id, role, text: c.text, images: c.images, videos: c.videos, audios: c.audios, files: c.files, tools, timestamp: msg.timestamp })
   }
   return deduped
 }
