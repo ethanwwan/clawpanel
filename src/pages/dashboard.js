@@ -115,7 +115,24 @@ async function loadDashboardData(page, fullRefresh = false) {
   // 并发保护：如果上一次加载仍在进行，跳过本次（fullRefresh 除外）
   if (_loadInFlight && !fullRefresh) return
   _loadInFlight = true
-  try { await _loadDashboardDataInner(page, fullRefresh) } finally { _loadInFlight = false }
+  // 超时保护：60 秒后强制重置，防止永久挂起
+  const timeoutId = setTimeout(() => {
+    if (_loadInFlight) {
+      console.warn('[dashboard] loadDashboardData timeout, forcing reset')
+      _loadInFlight = false
+    }
+  }, 60000)
+  console.log(`[dashboard] loadDashboardData started, fullRefresh=${fullRefresh}`)
+  try {
+    await _loadDashboardDataInner(page, fullRefresh)
+    console.log(`[dashboard] loadDashboardData completed`)
+  } catch (e) {
+    console.error(`[dashboard] loadDashboardData failed:`, e)
+  } finally {
+    clearTimeout(timeoutId)
+    _loadInFlight = false
+    console.log(`[dashboard] loadDashboardData finally, _loadInFlight reset`)
+  }
 }
 
 async function _loadDashboardDataInner(page, fullRefresh) {
