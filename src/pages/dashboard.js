@@ -200,6 +200,7 @@ async function _loadDashboardDataInner(page, fullRefresh) {
   }
 
   renderStatCards(page, services, version, [], config, panelConfig)
+  console.log(`[dashboard] renderStatCards called, cardsEl exists: ${!!page.querySelector('#stat-cards')}`)
   if (gw) {
     maybeShowForeignGatewayBindingPrompt({
       service: gw,
@@ -248,6 +249,7 @@ async function openGatewayConflict(page, error = null, reason = null) {
 
 function renderStatCards(page, services, version, agents, config, panelConfig) {
   const cardsEl = page.querySelector('#stat-cards')
+  if (!cardsEl) { console.warn('[dashboard] #stat-cards not found'); return }
   const gw = services.find(s => s.label === 'ai.openclaw.gateway')
   const foreignGateway = isForeignGatewayService(gw)
   const runningCount = services.filter(s => s.running).length
