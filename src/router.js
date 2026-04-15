@@ -32,6 +32,7 @@ export function initRouter(contentEl) {
 }
 
 async function loadRoute() {
+  console.log('[router] loadRoute called, hash:', window.location.hash)
   const hash = window.location.hash.slice(1) || _defaultRoute
   const routePath = hash.split('?')[0]
   const loader = routes[routePath]
