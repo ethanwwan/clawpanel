@@ -1232,15 +1232,15 @@ async function connectGateway() {
       _isStreaming = false
       // 清空消息队列（Gateway 重启后之前的发送请求已无效）
       _messageQueue = []
-      // 重连后恢复：保留当前 sessionKey，不重复加载历史
+      // 重连后恢复：保留当前 sessionKey，重新加载历史以确保消息最新
+      _lastHistoryHash = ''
       if (!_sessionKey) {
         const saved = localStorage.getItem(STORAGE_SESSION_KEY)
         _sessionKey = saved || sessionKey
         updateSessionTitle()
-        loadHistory()
-      } else {
-        syncWorkspaceContext(false)
       }
+      loadHistory()
+      syncWorkspaceContext(false)
       // 始终刷新会话列表（无论是否有 sessionKey）
       refreshSessionList()
     })
