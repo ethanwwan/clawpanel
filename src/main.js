@@ -418,12 +418,7 @@ async function boot() {
       setDefaultRoute(engine.getSetupRoute())
       navigate(engine.getSetupRoute())
     } else {
-      const setupRoute = engine.getSetupRoute()
-      const currentHash = window.location.hash.slice(1) || ''
-      if (currentHash === setupRoute || !currentHash) {
-        navigate(engine.getDefaultRoute())
-      }
-
+      // initRouter() 会在 hash 为空时自动加载默认路由，不需要额外调用 navigate
       // Gateway 横幅（所有引擎均注册，update() 内部按引擎判断显隐）
       setupGatewayBanner()
 
