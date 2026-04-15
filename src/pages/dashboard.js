@@ -139,7 +139,7 @@ async function _loadDashboardDataInner(page, fullRefresh) {
     api.listBackups(),
     api.listConfiguredPlatforms().catch(() => []),
   ]), 15000).catch(() => [{ status: 'rejected' }, { status: 'rejected' }, { status: 'rejected' }, { status: 'rejected' }])
-  const logsP = api.readLogTail('gateway', 20).catch(() => '')
+  const logsP = withTimeout(api.readLogTail('gateway', 20).catch(() => ''), 10000).catch(() => '')
 
   // 第一波：服务状态 + 配置 + 版本 → 立即渲染统计卡片
   const [servicesRes, configRes, versionRes, panelConfigRes] = await coreP
