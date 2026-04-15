@@ -248,9 +248,9 @@ async function openGatewayConflict(page, error = null, reason = null) {
 }
 
 function renderStatCards(page, services, version, agents, config, panelConfig) {
-  console.log('[dashboard] renderStatCards called, services count:', services?.length)
   const cardsEl = page.querySelector('#stat-cards')
-  if (!cardsEl) { console.error('[dashboard] #stat-cards not found!'); return }
+  console.log('[dashboard] renderStatCards called, cardsEl:', cardsEl ? 'found (len=' + cardsEl.innerHTML.length + ')' : 'NOT FOUND', 'agents:', agents?.length)
+  if (!cardsEl) return
   const gw = services.find(s => s.label === 'ai.openclaw.gateway')
   const foreignGateway = isForeignGatewayService(gw)
   const runningCount = services.filter(s => s.running).length
