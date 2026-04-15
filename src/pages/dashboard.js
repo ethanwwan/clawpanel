@@ -250,6 +250,7 @@ async function openGatewayConflict(page, error = null, reason = null) {
 function renderStatCards(page, services, version, agents, config, panelConfig) {
   const cardsEl = page.querySelector('#stat-cards')
   if (!cardsEl) { console.warn('[dashboard] #stat-cards not found'); return }
+  console.log(`[dashboard] renderStatCards: cardsEl.innerHTML length before: ${cardsEl.innerHTML.length}`)
   const gw = services.find(s => s.label === 'ai.openclaw.gateway')
   const foreignGateway = isForeignGatewayService(gw)
   const runningCount = services.filter(s => s.running).length
@@ -335,7 +336,9 @@ function renderStatCards(page, services, version, agents, config, panelConfig) {
 }
 
 function renderOverview(page, services, mcpConfig, backups, config, agents, statusSummary, channels) {
+  console.log(`[dashboard] renderOverview called`)
   const containerEl = page.querySelector('#dashboard-overview-container')
+  if (!containerEl) { console.warn('[dashboard] #dashboard-overview-container not found'); return }
   const gw = services.find(s => s.label === 'ai.openclaw.gateway')
   const foreignGateway = isForeignGatewayService(gw)
   const mcpCount = mcpConfig?.mcpServers ? Object.keys(mcpConfig.mcpServers).length : 0
@@ -562,9 +565,12 @@ const LOG_LEVEL_STYLE = {
 }
 
 function renderLogs(page, logs) {
+  console.log(`[dashboard] renderLogs called, logs length: ${logs?.length || 0}`)
   const logsEl = page.querySelector('#recent-logs')
+  console.log(`[dashboard] renderLogs: logsEl exists: ${!!logsEl}, current innerHTML length: ${logsEl?.innerHTML?.length || 0}`)
   if (!logs) {
     logsEl.innerHTML = '<div style="color:var(--text-tertiary);padding:12px">' + t('dashboard.noLogs') + '</div>'
+    console.log(`[dashboard] renderLogs: set noLogs message`)
     return
   }
   const lines = logs.trim().split('\n')
