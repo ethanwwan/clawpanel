@@ -121,7 +121,7 @@ async function loadDashboardData(page, fullRefresh = false) {
       console.warn('[dashboard] loadDashboardData timeout, forcing reset')
       _loadInFlight = false
     }
-  }, 60000)
+  }, 12000)
   console.log(`[dashboard] loadDashboardData started, fullRefresh=${fullRefresh}`)
   try {
     await _loadDashboardDataInner(page, fullRefresh)
