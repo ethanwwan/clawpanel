@@ -115,28 +115,21 @@ async function loadDashboardData(page, fullRefresh = false) {
   // 并发保护：如果上一次加载仍在进行，跳过本次（fullRefresh 除外）
   if (_loadInFlight && !fullRefresh) return
   _loadInFlight = true
-  // 超时保护：60 秒后强制重置，防止永久挂起
+  // 超时保护：12 秒后强制重置，防止永久挂起
   const timeoutId = setTimeout(() => {
-    if (_loadInFlight) {
-      console.warn('[dashboard] loadDashboardData timeout, forcing reset')
-      _loadInFlight = false
-    }
+    if (_loadInFlight) _loadInFlight = false
   }, 12000)
-  console.log(`[dashboard] loadDashboardData started, fullRefresh=${fullRefresh}`)
   try {
     await _loadDashboardDataInner(page, fullRefresh)
-    console.log(`[dashboard] loadDashboardData completed`)
   } catch (e) {
-    console.error(`[dashboard] loadDashboardData failed:`, e)
+    console.error('[dashboard] loadDashboardData 异常:', e)
   } finally {
     clearTimeout(timeoutId)
     _loadInFlight = false
-    console.log(`[dashboard] loadDashboardData finally, _loadInFlight reset`)
   }
 }
 
 async function _loadDashboardDataInner(page, fullRefresh) {
-  console.log('[dashboard] _loadDashboardDataInner started')
   syncDashboardInstanceScope()
   // 分波加载：关键数据先渲染，次要数据后填充，减少白屏等待
   // 轻量调用（读文件）每次都做；重量调用（spawn CLI/网络请求）只在首次或手动刷新时做
@@ -249,7 +242,6 @@ async function openGatewayConflict(page, error = null, reason = null) {
 
 function renderStatCards(page, services, version, agents, config, panelConfig) {
   const cardsEl = page.querySelector('#stat-cards')
-  console.log('[dashboard] renderStatCards called, cardsEl:', cardsEl ? 'found (len=' + cardsEl.innerHTML.length + ')' : 'NOT FOUND', 'agents:', agents?.length)
   if (!cardsEl) return
   const gw = services.find(s => s.label === 'ai.openclaw.gateway')
   const foreignGateway = isForeignGatewayService(gw)
